@@ -1,0 +1,83 @@
+name: Backend → production
+
+# The approval step. Nothing reaches the production API until someone runs this
+# from the Actions tab ("Run workflow"). By default it deploys the commit
+# staging runs; give an older commit to roll back. If the API does not come
+# back healthy, the previous commit is put back automatically.
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Commit to release. Leave empty to release what is on staging now."
+        required: false
+        default: ""
+
+concurrency:
+  group: backend-production
+  cancel-in-progress: false
+
+jobs:
+  production:
+    name: Deploy Backend to production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          COMMIT: ${{ inputs.commit }}
+          APPROVER: ${{ github.actor }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: COMMIT,APPROVER
+          script: |
+            set -euo pipefail
+            APP=/home/ubuntu/shichida_backend
+            RELEASES=/home/ubuntu/releases
+
+            COMMIT=${COMMIT:-$(cat "$RELEASES/backend-staging.sha")}
+            if ! printf '%s' "$COMMIT" | grep -qxE '[0-9a-f]{7,40}'; then
+              echo "Not a commit hash: '$COMMIT'"
+              exit 1
+            fi
+
+            cd "$APP"
+            git fetch -q origin
+            SHA=$(git rev-parse --verify -q "$COMMIT^{commit}") || { echo "Unknown commit $COMMIT"; exit 1; }
+            if ! git merge-base --is-ancestor "$SHA" origin/main; then
+              echo "$SHA is not on main"
+              exit 1
+            fi
+            PREV=$(git rev-parse HEAD)
+
+            # Chained with && so a failed step returns failure even where
+            # set -e is suspended (inside an if).
+            release() {
+              git reset -q --keep "$1" &&
+                venv/bin/pip install -q -r requirements.txt &&
+                venv/bin/python manage.py create_dynamo_tables &&
+                sudo systemctl restart shichida
+            }
+            healthy() {
+              for _ in $(seq 1 30); do
+                [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: www.brainastra.com' http://127.0.0.1:8000/api/v1/centres/ || true)" = 401 ] && return 0
+                sleep 1
+              done
+              return 1
+            }
+
+            if ! release "$SHA" || ! healthy; then
+              echo "Production API did not come up on $SHA — putting $PREV back"
+              sudo journalctl -u shichida -n 40 --no-pager
+              if release "$PREV" && healthy; then
+                echo "Restored $PREV"
+              else
+                echo "RESTORE FAILED TOO — check the server now"
+              fi
+              exit 1
+            fi
+            echo "$SHA" > "$RELEASES/backend-production.sha"
+            echo "$(date -u +%FT%TZ) $SHA released by $APPROVER (was $PREV)" >> "$RELEASES/backend-production.log"
+            echo "Production backend now runs $SHA, released by $APPROVER"

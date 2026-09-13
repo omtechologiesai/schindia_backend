@@ -1,190 +1,148 @@
-# Deploying to production
+# Deploying
 
-Production is a single EC2 box. It runs the Django API under systemd and
-serves the built frontend with nginx. CloudFront sits in front of it for
-`brainastra.com`.
+One EC2 box runs both environments. Merging to `main` updates **staging only**.
+Production changes only when someone releases it by hand from GitHub.
 
-| | |
-|---|---|
-| Host | `ubuntu@15.206.125.114` (`ssh -i ~/.ssh/shichida-ec2`) |
-| Backend | `~/shichida_backend`, branch `main`, service `shichida` |
-| Frontend | built locally, copied to `/var/www/shichida-admin` |
-| Site | https://www.brainastra.com |
-| Data | DynamoDB, tables prefixed `Shichida-production-` |
+| | Staging | Production |
+|---|---|---|
+| Site | https://staging.brainastra.com | https://www.brainastra.com (CloudFront) |
+| Backend | `~/shichida_backend_staging`, service `shichida-staging`, port 8001 | `~/shichida_backend`, service `shichida`, port 8000 |
+| Frontend | `/var/www/shichida-admin-staging` | `/var/www/shichida-admin` |
+| Data | DynamoDB `Shichida-dev-*` (shared with local development) | DynamoDB `Shichida-production-*` |
+| Updated by | every push to `main`, automatically | "Run workflow", by a person |
 
-Both repos deploy from `main`.
+Host: `ubuntu@15.206.125.114` (`ssh -i ~/.ssh/shichida-ec2`).
 
 ---
 
-## 1. Verify before you deploy — do not skip this
+## 1. Before merging
 
 ```bash
 # Backend
-cd schindia_backend
-git checkout main && git pull origin main
 ./venv/bin/python manage.py test          # expect: OK
 
 # Frontend
-cd ../Shichida
-git checkout main && git pull origin main
-npm install
 npm run lint                              # expect: no output
 npm test                                  # expect: all passing
 ```
 
-**`npm run lint` is the gate.** `npm run build` runs `tsc -b` first, so a
-typecheck failure produces *no bundle at all* — you cannot deploy a
-frontend that does not typecheck. An unused variable is enough to stop it.
-
-This has caught a broken `main` on two separate occasions. If something
-fails here, fix it and push before going further. Never deploy red.
+**`npm run lint` is the gate for the frontend.** `npm run build` runs `tsc -b`
+first, so a typecheck error produces no bundle at all. The staging workflow
+runs lint and tests too and stops on a failure, but finding out before you
+merge is cheaper.
 
 ---
 
-## 2. Backend
+## 2. Merge → staging (automatic)
 
-```bash
-ssh -i ~/.ssh/shichida-ec2 ubuntu@15.206.125.114
+Each repo has a **"… → staging"** workflow that runs on every push to `main`:
 
-cd ~/shichida_backend
-git rev-parse --short HEAD                # write this down — rollback point
-git fetch origin main
-git reset --hard origin/main
-./venv/bin/pip install -q -r requirements.txt
-sudo systemctl restart shichida
-systemctl is-active shichida              # expect: active
-```
+- **Frontend → staging**: typecheck, test, build, keep the build in
+  `/home/ubuntu/releases/frontend/<commit>`, then swap it into the staging
+  folder and check staging serves it.
+- **Backend → staging**: run the tests, move the staging checkout to the
+  commit, install requirements, create any missing tables, restart
+  `shichida-staging`, and check the API answers.
 
-`reset --hard` is deliberate: the working tree must match `main` exactly.
-If someone has hand-edited a file on the server, that edit is discarded —
-which is the point, but check `git status` first if you suspect one.
+Watch them under the repo's **Actions** tab. Then try the change on
+https://staging.brainastra.com. Staging uses the dev tables, so it is safe to
+create and delete things there.
 
 ---
 
-## 3. Frontend
+## 3. Staging → production (manual)
 
-Build locally, then **stage and swap**. Never rsync straight into the live
-directory: `--delete` removes `index.html` mid-copy and nginx answers 500
-to every request until the copy finishes.
+Release the backend first, then the frontend, so new screens never call an API
+that isn't live yet.
 
-```bash
-cd Shichida
-rm -rf dist && npm run build
-grep -o 'assets/[A-Za-z0-9_.-]*\.js' dist/index.html | head -1   # note the hash
+1. GitHub → **schindia_backend** → Actions → **Backend → production** →
+   **Run workflow**. Leave *commit* empty to release what staging runs.
+2. Wait for it to go green.
+3. GitHub → **Shichida** → Actions → **Frontend → production** →
+   **Run workflow**, *commit* empty.
 
-rsync -az --delete -e "ssh -i ~/.ssh/shichida-ec2" \
-  dist/ ubuntu@15.206.125.114:/tmp/shichida-new/
+What they do:
 
-ssh -i ~/.ssh/shichida-ec2 ubuntu@15.206.125.114 'set -e
-  sudo rm -rf /var/www/shichida-admin.new
-  sudo cp -a /tmp/shichida-new /var/www/shichida-admin.new
-  sudo chown -R ubuntu:ubuntu /var/www/shichida-admin.new
-  sudo rm -rf /var/www/shichida-admin.prev
-  sudo mv /var/www/shichida-admin /var/www/shichida-admin.prev
-  sudo mv /var/www/shichida-admin.new /var/www/shichida-admin
-  rm -rf /tmp/shichida-new'
-```
+- **Backend → production** moves `~/shichida_backend` to the commit, installs
+  requirements, creates missing tables, restarts `shichida`, and checks the
+  API. If the API does not come back, it puts the previous commit back on its
+  own and the run fails.
+- **Frontend → production** copies the exact build that was on staging — not
+  a rebuild — into place, and puts the previous build back if production does
+  not serve the new one.
 
-The swap is two `mv` calls, so the site is never mid-copy.
-
-### The production API URL
-
-`.env.production.local` (gitignored, create it once) must contain:
-
-```
-VITE_INVOICES_API_URL=https://www.brainastra.com
-```
-
-Without it the production build throws at startup. With the wrong value —
-`localhost:8000`, say — the site loads and every API call silently fails.
-Always check the built bundle before deploying:
-
-```bash
-grep -c "localhost:8000" dist/assets/*.js    # expect: 0
-```
+Each release is recorded in `/home/ubuntu/releases/*-production.log` with the
+commit and who ran it. Anyone with write access to a repo can run these.
 
 ---
 
-## 4. Verify
+## 4. Verify production
 
 ```bash
 cd schindia_backend
 ./smoke-production.sh                     # expect: 17 passed, 0 failed
 ```
 
-Then confirm the served bundle is the one you just built:
-
 ```bash
-echo "built : $(grep -o 'assets/[A-Za-z0-9_.-]*\.js' ../Shichida/dist/index.html | head -1)"
-echo "served: $(curl -s https://www.brainastra.com/ | grep -o 'assets/[A-Za-z0-9_.-]*\.js' | head -1)"
-```
-
-These must match. A mismatch means the deploy did not take, or someone
-else deployed something that is not in `main` — both worth stopping for.
-This check has caught a bundle in production that existed in no commit.
-
-Finally, check nothing is erroring:
-
-```bash
-ssh -i ~/.ssh/shichida-ec2 ubuntu@15.206.125.114 \
-  'sudo journalctl -u shichida --since "5 minutes ago" -p err --no-pager'
+ssh -i ~/.ssh/shichida-ec2 ubuntu@15.206.125.114 '
+  cat ~/releases/frontend-staging.sha ~/releases/frontend-production.sha
+  curl -s -H "Host: www.brainastra.com" http://127.0.0.1/ | grep -oE "assets/index-[^\"]+\.js"
+  sudo journalctl -u shichida --since "10 minutes ago" -p err --no-pager'
 ```
 
 ---
 
 ## 5. Rolling back
 
-```bash
-# Backend — the hash you wrote down in step 2
-ssh -i ~/.ssh/shichida-ec2 ubuntu@15.206.125.114 \
-  'cd ~/shichida_backend && git reset --hard <hash> && sudo systemctl restart shichida'
+Run the same production workflow and type the older commit into *commit*.
 
-# Frontend — the previous release is kept
-ssh -i ~/.ssh/shichida-ec2 ubuntu@15.206.125.114 \
-  'sudo rm -rf /var/www/shichida-admin.bad
-   sudo mv /var/www/shichida-admin /var/www/shichida-admin.bad
-   sudo mv /var/www/shichida-admin.prev /var/www/shichida-admin'
-```
+- **Backend**: any commit on `main`.
+- **Frontend**: one of the last ten builds kept on the server —
+  `ls -t /home/ubuntu/releases/frontend` lists them, newest first.
 
-`/var/www/shichida-admin.prev` is always the release immediately before the
-current one. Roll back once and it is gone — take a copy if you need to
-go back further.
+Don't roll back by hand on the server: the workflows keep
+`/home/ubuntu/releases/*.sha` in step with what is live, and the next release
+reads them.
 
 ---
 
 ## Things that will bite you
 
-**Database changes are not automatic.** DynamoDB tables and indexes are
-created by `dynamo_backend/setup_tables.py`, which does *not* run on
-deploy. If a change adds a table or a GSI, create it explicitly:
+**The frontend has no API address baked in.** Production builds always call
+the site they are served from (`src/lib/apiBase.ts`), which is what lets one
+build serve staging and production. `VITE_INVOICES_API_URL` only affects
+`npm run dev`. Don't add it back to a production build or to the workflow.
+
+**Staging's folder contains a production `.env`.** The `shichida-staging`
+service reads `.env.staging`, but a plain `manage.py` in
+`~/shichida_backend_staging` reads `.env` and talks to **production** tables.
+Run commands there with the service's settings:
 
 ```bash
-DJANGO_ENV=production ./venv/bin/python -c "
-import os, django
-os.environ.setdefault('DJANGO_SETTINGS_MODULE','schindia_backend.settings')
-django.setup()
-from dynamo_backend.setup_tables import create_all_tables
-from dynamo_backend.tables import PREFIX
-assert PREFIX == 'Shichida-production'
-create_all_tables()"
+sudo systemd-run --wait --pipe --collect -p User=ubuntu \
+  -p WorkingDirectory=/home/ubuntu/shichida_backend_staging \
+  -p EnvironmentFile=/home/ubuntu/shichida_backend_staging/.env.staging \
+  /home/ubuntu/shichida_backend_staging/venv/bin/python manage.py <command>
 ```
 
-It skips anything that already exists. Adding a GSI to an existing table
-is *not* covered — that needs `update_table`, and it must be done one
-index at a time. A missing index does not fail loudly; the query just
-throws when someone happens to use that screen. Attendance was broken in
-production this way for days.
+**Backend tests don't block staging yet.** About 46 tests reach the real
+DynamoDB instead of a mock, so they fail on GitHub, which has no AWS
+credentials. They pass locally only because your `.env` has real keys, and
+there they read and write the dev tables. The workflow runs the suite and
+shows the result but deploys anyway. Once those tests use a mock, remove
+`continue-on-error` in `.github/workflows/deploy-staging.yml`.
 
-**Secrets live in the systemd unit,** not in `.env`:
-`/etc/systemd/system/shichida.service`. python-decouple reads the
-environment before `.env`, so the unit always wins — editing `.env` on the
-server changes nothing. Values containing spaces must be quoted, or
-systemd truncates at the first space.
+**New indexes are not automatic.** Deploys run `create_dynamo_tables`, which
+creates missing *tables* but never adds a GSI to a table that already exists.
+That needs `update_table`, one index at a time, in both environments. A
+missing index does not fail loudly; the screen that queries it just errors.
+Attendance was broken in production this way for days.
 
-**Email is capped.** SES is still in sandbox: mail only reaches verified
-addresses, and everything else is rejected. The app logs the failure and
-carries on, so a user sees "check your email" and nothing arrives.
+**Production secrets live in the systemd unit,** not in `.env`:
+`/etc/systemd/system/shichida.service`. python-decouple reads the environment
+before `.env`, so the unit always wins for the running service. Values
+containing spaces must be quoted, or systemd truncates at the first space.
 
-**CloudFront usually needs no invalidation** — it has been fetching from
-origin on each deploy. If a stale build persists, invalidate from the
-console; the deploy IAM user has no CloudFront permissions.
+**CloudFront usually needs no invalidation**: it fetches from the server on
+each release. If a stale build persists, invalidate from the console; the
+deploy IAM user has no CloudFront permissions.
