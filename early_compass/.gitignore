@@ -1,0 +1,9 @@
+node_modules/
+dist/
+storage/
+sample-report/
+.dynamodb/
+.env
+.env.local
+*.log
+.DS_Store

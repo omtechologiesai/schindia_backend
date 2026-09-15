@@ -146,3 +146,11 @@ containing spaces must be quoted, or systemd truncates at the first space.
 **CloudFront usually needs no invalidation**: it fetches from the server on
 each release. If a stale build persists, invalidate from the console; the
 deploy IAM user has no CloudFront permissions.
+
+---
+
+## Early Compass (/compass)
+
+A separate Node service in `early_compass/`, with its own workflows ("Early Compass → staging" /
+"Early Compass → production"), tables (`EarlyCompass-*`) and settings. Its one-time server setup
+and runbook: [early_compass/deploy/README.md](early_compass/deploy/README.md).

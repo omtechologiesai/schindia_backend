@@ -1,0 +1,120 @@
+name: Early Compass → staging
+
+# Every merge to main that touches early_compass/ is typechecked, tested against DynamoDB Local,
+# bundled, and switched in on staging.brainastra.com/compass (EarlyCompass-dev-* tables). Production
+# is released by hand with "Early Compass → production", which ships this exact build (kept in
+# /home/ubuntu/releases/compass/<commit>).
+#
+# The server needs a one-time setup first: early_compass/deploy/README.md.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'early_compass/**'
+      - '.github/workflows/compass-staging.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: compass-staging
+  cancel-in-progress: false
+
+jobs:
+  staging:
+    name: Test, build and deploy Early Compass to staging
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: early_compass
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local:latest
+        ports:
+          - 8000:8000
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: early_compass/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck and bundle
+        run: npm run build
+
+      # Against DynamoDB Local only; the tests never reach AWS.
+      - name: Test
+        run: npm test
+        env:
+          DYNAMODB_ENDPOINT: http://127.0.0.1:8000
+
+      - name: Package the release
+        run: |
+          mkdir -p release/server
+          cp -r dist package.json package-lock.json release/
+          cp -r server/assets release/server/assets
+          tar czf ../compass-release.tgz -C release .
+
+      - name: Upload the release to the server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: compass-release.tgz
+          target: /home/ubuntu/releases/compass-upload/${{ github.sha }}
+
+      - name: Switch staging to the new release
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            SHA=${{ github.sha }}
+            RELEASES=/home/ubuntu/releases
+            DIR=$RELEASES/compass/$SHA
+            NODE=$(command -v node)
+
+            rm -rf "$DIR" && mkdir -p "$DIR"
+            tar xzf "$RELEASES/compass-upload/$SHA/compass-release.tgz" -C "$DIR"
+            rm -rf "$RELEASES/compass-upload/$SHA"
+            cd "$DIR"
+            npm ci --omit=dev --no-audit --no-fund
+
+            # Create or update staging's tables with staging's own settings.
+            sudo systemd-run --quiet --wait --pipe --collect \
+              -p User=ubuntu -p WorkingDirectory="$DIR" \
+              -p EnvironmentFile=/etc/early-compass/staging.env \
+              "$NODE" dist/scripts/db-setup.js
+
+            ln -sfn "$DIR" /home/ubuntu/early-compass-staging
+            sudo systemctl restart early-compass-staging
+            code=000
+            for _ in $(seq 1 30); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8091/compass/healthz || true)
+              [ "$code" = 200 ] && break
+              sleep 1
+            done
+            if [ "$code" != 200 ]; then
+              echo "Staging Early Compass answered $code, expected 200"
+              sudo journalctl -u early-compass-staging -n 40 --no-pager
+              exit 1
+            fi
+            echo "$SHA" > "$RELEASES/compass-staging.sha"
+
+            # Keep the five newest releases, plus whatever staging and production run.
+            keep=" $(cat "$RELEASES/compass-staging.sha") $(cat "$RELEASES/compass-production.sha" 2>/dev/null || true) "
+            cd "$RELEASES/compass"
+            ls -1t | tail -n +6 | while read -r old; do
+              case "$keep" in *" $old "*) ;; *) rm -rf "$old" ;; esac
+            done
+            echo "Staging Early Compass now runs $SHA"
