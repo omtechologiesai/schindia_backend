@@ -11,7 +11,7 @@ Production changes only when someone releases it by hand from GitHub.
 | Data | DynamoDB `Shichida-dev-*` (shared with local development) | DynamoDB `Shichida-production-*` |
 | Updated by | every push to `main`, automatically | "Run workflow", by a person |
 
-Host: `ubuntu@15.206.125.114` (`ssh -i ~/.ssh/shichida-ec2`).
+Host: `ubuntu@13.234.196.14` (`ssh -i ~/.ssh/shichida-ec2`).
 
 ---
 
@@ -84,7 +84,7 @@ cd schindia_backend
 ```
 
 ```bash
-ssh -i ~/.ssh/shichida-ec2 ubuntu@15.206.125.114 '
+ssh -i ~/.ssh/shichida-ec2 ubuntu@13.234.196.14 '
   cat ~/releases/frontend-staging.sha ~/releases/frontend-production.sha
   curl -s -H "Host: www.brainastra.com" http://127.0.0.1/ | grep -oE "assets/index-[^\"]+\.js"
   sudo journalctl -u shichida --since "10 minutes ago" -p err --no-pager'
@@ -146,3 +146,11 @@ containing spaces must be quoted, or systemd truncates at the first space.
 **CloudFront usually needs no invalidation**: it fetches from the server on
 each release. If a stale build persists, invalidate from the console; the
 deploy IAM user has no CloudFront permissions.
+
+---
+
+## Early Compass (/compass)
+
+A separate Node service in `early_compass/`, with its own workflows ("Early Compass → staging" /
+"Early Compass → production"), tables (`EarlyCompass-*`) and settings. Its one-time server setup
+and runbook: [early_compass/deploy/README.md](early_compass/deploy/README.md).

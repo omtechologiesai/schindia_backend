@@ -1,0 +1,85 @@
+name: Early Compass → production
+
+# The approval step. Nothing reaches www.brainastra.com/compass until someone runs this from the
+# Actions tab ("Run workflow"). It ships a release that has already run on staging — the same
+# files, not a rebuild. To roll back, run it again with an older commit; the last five releases
+# are kept on the server. If the new release doesn't come up healthy, the previous one is put back.
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Commit to release. Leave empty to release what staging runs now."
+        required: false
+        default: ""
+
+concurrency:
+  group: compass-production
+  cancel-in-progress: false
+
+jobs:
+  production:
+    name: Release Early Compass to production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Switch production to the release from staging
+        uses: appleboy/ssh-action@v1
+        env:
+          COMMIT: ${{ inputs.commit }}
+          APPROVER: ${{ github.actor }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: COMMIT,APPROVER
+          script: |
+            set -euo pipefail
+            RELEASES=/home/ubuntu/releases
+            LINK=/home/ubuntu/early-compass
+            NODE=$(command -v node)
+
+            COMMIT=${COMMIT:-$(cat "$RELEASES/compass-staging.sha")}
+            if ! printf '%s' "$COMMIT" | grep -qxE '[0-9a-f]{7,40}'; then
+              echo "Not a commit hash: '$COMMIT'"
+              exit 1
+            fi
+            found=$(cd "$RELEASES/compass" && ls -1d "$COMMIT"* 2>/dev/null || true)
+            if [ "$(printf '%s' "$found" | grep -c .)" != 1 ]; then
+              echo "No single staged release for $COMMIT. Available:"
+              ls -1t "$RELEASES/compass"
+              exit 1
+            fi
+            SHA=$found
+            DIR=$RELEASES/compass/$SHA
+            test -f "$DIR/dist/server/index.js"
+            PREV=$(readlink "$LINK" 2>/dev/null || true)
+
+            # Tables first: setup only ever adds tables and indexes, so the running release is unaffected.
+            sudo systemd-run --quiet --wait --pipe --collect \
+              -p User=ubuntu -p WorkingDirectory="$DIR" \
+              -p EnvironmentFile=/etc/early-compass/production.env \
+              "$NODE" dist/scripts/db-setup.js
+
+            healthy() {
+              for _ in $(seq 1 30); do
+                [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/compass/healthz || true)" = 200 ] && return 0
+                sleep 1
+              done
+              return 1
+            }
+
+            ln -sfn "$DIR" "$LINK"
+            sudo systemctl restart early-compass
+            if ! healthy; then
+              echo "Production Early Compass did not come up on $SHA"
+              sudo journalctl -u early-compass -n 40 --no-pager
+              if [ -n "$PREV" ]; then
+                ln -sfn "$PREV" "$LINK"
+                sudo systemctl restart early-compass
+                if healthy; then echo "Restored ${PREV##*/}"; else echo "RESTORE FAILED TOO — check the server now"; fi
+              fi
+              exit 1
+            fi
+            echo "$SHA" > "$RELEASES/compass-production.sha"
+            echo "$(date -u +%FT%TZ) $SHA released by $APPROVER (was ${PREV##*/})" >> "$RELEASES/compass-production.log"
+            echo "Production Early Compass now runs $SHA, released by $APPROVER"

@@ -1,0 +1,22 @@
+[Unit]
+Description=Shichida Early Compass API (staging, staging.brainastra.com/compass)
+After=network-online.target
+Wants=network-online.target
+# Skipped, not failed, until the first release exists (otherwise it would restart in a loop).
+ConditionPathExists=/home/ubuntu/early-compass-staging/dist/server/index.js
+
+[Service]
+User=ubuntu
+# A symlink to the current release, switched by the "Early Compass → staging" workflow
+WorkingDirectory=/home/ubuntu/early-compass-staging
+EnvironmentFile=/etc/early-compass/staging.env
+Environment=NODE_OPTIONS=--max-old-space-size=256
+ExecStart=/usr/bin/node dist/server/index.js
+Restart=on-failure
+RestartSec=3
+# The server is shared with the admin app: a runaway report render must not starve it.
+MemoryMax=350M
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

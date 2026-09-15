@@ -1,0 +1,51 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ProductionTables",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+        "dynamodb:DescribeTable",
+        "dynamodb:CreateTable",
+        "dynamodb:UpdateTable",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:UpdateTimeToLive",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:UpdateContinuousBackups"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:ap-south-1:253264393609:table/EarlyCompass-production-*",
+        "arn:aws:dynamodb:ap-south-1:253264393609:table/EarlyCompass-production-*/index/*"
+      ]
+    },
+    {
+      "Sid": "ProductionReportFiles",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::shichida-early-compass-production-253264393609/*"
+    },
+    {
+      "Sid": "ListProductionReportFiles",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::shichida-early-compass-production-253264393609"
+    },
+    {
+      "Sid": "SendReportEmails",
+      "Effect": "Allow",
+      "Action": ["ses:SendEmail", "ses:SendRawEmail"],
+      "Resource": [
+        "arn:aws:ses:ap-south-1:253264393609:identity/*",
+        "arn:aws:ses:ap-south-1:253264393609:configuration-set/shichida-default"
+      ]
+    }
+  ]
+}
