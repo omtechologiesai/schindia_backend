@@ -7,104 +7,17 @@ Early Compass runs on the same EC2 box as the admin app, as its own Node service
 | Portal | https://staging.brainastra.com/compass/ | https://www.brainastra.com/compass/ |
 | API service | `early-compass-staging`, 127.0.0.1:8091 | `early-compass`, 127.0.0.1:8090 |
 | Current release | `/home/ubuntu/early-compass-staging` → `releases/compass/<commit>` | `/home/ubuntu/early-compass` → `releases/compass/<commit>` |
-| Settings | `/etc/early-compass/staging.env` | `/etc/early-compass/production.env` |
-| DynamoDB | `EarlyCompass-dev-*` (shared with local development) | `EarlyCompass-production-*` |
-| Report files | `s3://shichida-early-compass-dev-253264393609` | `s3://shichida-early-compass-production-253264393609` |
+| Settings | `/etc/early-compass/staging.env` (root, 600) | `/etc/early-compass/production.env` (root, 600) |
+| AWS identity | IAM user `early-compass-staging` | IAM user `early-compass-production` |
+| DynamoDB | `EarlyCompass-dev-*` (shared with local development) | `EarlyCompass-production-*` (point-in-time recovery on) |
+| Report files | `s3://shichida-early-compass-dev-253264393609` | `s3://shichida-early-compass-production-253264393609` (versioned) |
 | Updated by | a push to `main` touching `early_compass/` | "Early Compass → production", run by a person |
 
+Host: `ubuntu@13.234.196.14` (Elastic IP, `ssh -i ~/.ssh/shichida-ec2`).
+
 The **portal** (the React app staff use) is built by the frontend repo's staging workflow into the
-admin app's release as `compass/`, and promoted to production with "Frontend → production". The
-**API** is released by this repo's two Early Compass workflows. Release the API first, then the
-frontend.
-
----
-
-## One-time setup (before the first push)
-
-Nothing below has been done yet. Every step is needed once; the workflows fail until they are.
-
-### 0. Memory
-
-The box is a **t3.micro (911 MB, no swap)** already running both Django services, with about
-330 MB free. Two Node services rendering PDFs will not fit reliably, and the kernel would kill
-processes, possibly the production API. Before installing:
-
-- **Resize to t3.small (2 GB)** and add 2 GB of swap. The instance has **no Elastic IP**, so
-  stopping it changes its public IP: allocate and associate an Elastic IP first, then update the
-  CloudFront origin (`ec2-15-206-125-114…`), the `staging.brainastra.com` DNS record and the
-  `EC2_HOST` secret in both repos. Plan a 5–10 minute window.
-- Grow the root volume from 8 GB (2.8 GB free) to 20 GB: each release keeps its own
-  `node_modules`, and five are kept.
-
-### 1. AWS
-
-```bash
-export AWS_PROFILE=shichida-setup AWS_REGION=ap-south-1
-ACCOUNT=253264393609
-
-# Production bucket (the dev bucket already exists): private, encrypted
-B=shichida-early-compass-production-$ACCOUNT
-aws s3api create-bucket --bucket $B --create-bucket-configuration LocationConstraint=ap-south-1 --object-ownership BucketOwnerEnforced
-aws s3api put-public-access-block --bucket $B --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-aws s3api put-bucket-encryption --bucket $B --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
-aws s3api put-bucket-versioning --bucket $B --versioning-configuration Status=Enabled
-
-# One IAM user per environment, allowed only its own tables, bucket and SES sending
-for ENV in staging production; do
-  aws iam create-user --user-name early-compass-$ENV
-  aws iam put-user-policy --user-name early-compass-$ENV --policy-name early-compass-$ENV \
-    --policy-document file://early_compass/deploy/iam-policy-$ENV.json
-  aws iam create-access-key --user-name early-compass-$ENV   # goes into that environment's env file
-done
-```
-
-The production tables are created by the first production release (`db:setup`), with
-point-in-time recovery turned on.
-
-### 2. CloudFront (www.brainastra.com)
-
-The distribution `E2EAKEDECULDQN` forwards only the `Authorization`, `Origin`, `Host` and
-`Content-Type` headers. Early Compass rejects every write without `X-Requested-With`, so sign-in
-would fail. Add a behaviour **above** the default one:
-
-- Path pattern `/compass*`, origin `ec2-origin`, redirect HTTP to HTTPS
-- Allowed methods: GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE
-- Legacy cache settings: headers `Host`, `Origin`, `Content-Type`, `X-Requested-With`; all
-  cookies; all query strings; minimum, default and maximum TTL all 0
-
-The default behaviour stays as it is. Staging isn't behind CloudFront.
-
-### 3. The server
-
-```bash
-ssh -i ~/.ssh/shichida-ec2 ubuntu@<EC2_HOST>
-
-# Node 22
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs
-node -v
-
-# Settings: copy deploy/staging.env.example and deploy/production.env.example, fill in
-# APP_SECRET (openssl rand -base64 48, different for each) and each IAM user's keys
-sudo mkdir -p /etc/early-compass
-sudo nano /etc/early-compass/staging.env
-sudo nano /etc/early-compass/production.env
-sudo chmod 600 /etc/early-compass/*.env
-
-# Services (copy deploy/early-compass*.service to the server first)
-sudo cp early-compass.service early-compass-staging.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable early-compass early-compass-staging
-mkdir -p /home/ubuntu/releases/compass
-
-# nginx: paste deploy/nginx-compass.conf into both server blocks
-# (8091 in the proxy_pass lines for staging), then:
-sudo nano /etc/nginx/sites-available/staging
-sudo nano /etc/nginx/sites-available/shichida
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-The services start once the first release exists (the workflows create the symlinks).
+admin app's release as `compass/`, and promoted with "Frontend → production". The **API** is
+released by this repo's two Early Compass workflows. Release the API first, then the frontend.
 
 ---
 
@@ -116,10 +29,12 @@ The services start once the first release exists (the workflows create the symli
 3. Actions → **Frontend → production** → Run workflow.
 
 Roll back by running the production workflow with an older commit (`ls -t ~/releases/compass`).
+Don't switch the symlinks by hand: the workflows keep `~/releases/compass-*.sha` in step with what
+is live.
 
 ## Workshop accounts
 
-Accounts are per table set. Local development and staging share `EarlyCompass-dev-*`, so an
+Accounts belong to a table set. Local development and staging share `EarlyCompass-dev-*`, so an
 account created locally already works on staging. For production, on the server:
 
 ```bash
@@ -129,14 +44,61 @@ sudo systemd-run --wait --pipe --collect -p User=ubuntu \
   /usr/bin/node dist/scripts/create-user.js --email person@example.org --name "Workshop Lead" --role staff
 ```
 
-It prints a generated password. Add `--reset` to set a new one. Staff can see and record every
-child; only admins can erase records, edit the checklist and manage accounts.
+It prints a generated password; add `--reset` for a new one. Staff can see and record every child;
+only admins can erase records, edit the checklist and manage accounts.
 
 ## Checking
 
 ```bash
-curl -s http://127.0.0.1:8091/compass/healthz            # on the server: staging
-curl -s https://www.brainastra.com/compass/healthz        # production, through CloudFront
+# on the server
+curl -s http://127.0.0.1:8091/compass/healthz          # staging API
+curl -s http://127.0.0.1:8090/compass/healthz          # production API
 sudo journalctl -u early-compass --since "10 minutes ago" --no-pager
 cat ~/releases/compass-staging.sha ~/releases/compass-production.sha
+
+# from anywhere
+curl -s https://www.brainastra.com/compass/healthz
+```
+
+---
+
+## How the server was set up (2026-09-15)
+
+Done once; kept here to rebuild the box or check what's there.
+
+**Instance.** Resized from t3.micro to **t3.small** (2 vCPU, 1.9 GB) with 2 GB of swap
+(`/swapfile`, `vm.swappiness=10`). Root volume grown from 8 GB to 20 GB. Elastic IP
+`13.234.196.14` (`eipalloc-0157ad9c415b1b7a2`) attached, replacing the auto-assigned
+15.206.125.114. The snapshot taken before the resize is `snap-0635d8e40275615c5`.
+
+**Network.** Security group `sg-0f5cdd55034b06c22` no longer opens port 8000: gunicorn is only
+reached through nginx on 127.0.0.1. Inbound is 22, 80 and 443.
+
+**CloudFront** `E2EAKEDECULDQN`: origin `ec2-13-234-196-14.ap-south-1.compute.amazonaws.com`, and a
+`/compass*` behaviour identical to the default plus the `X-Requested-With` header (Early Compass
+rejects writes without it; the default behaviour doesn't forward it). No caching.
+
+**AWS.** Buckets (private, SSE-S3; production versioned). IAM users with the inline policies in
+`iam-policy-staging.json` / `iam-policy-production.json`; their access keys exist only in the env
+files. Tables are created and updated by `db-setup` on every release.
+
+**Server.**
+
+```bash
+# Node 22 (NodeSource)
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs
+
+# Settings: from staging.env.example / production.env.example, each with its own APP_SECRET
+# (openssl rand -base64 48) and its IAM user's access key
+sudo install -m 600 -o root -g root staging.env /etc/early-compass/staging.env
+
+# Services (they stay skipped until a release exists)
+sudo cp early-compass.service early-compass-staging.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable early-compass early-compass-staging
+
+# nginx: nginx-compass.conf as /etc/nginx/snippets/early-compass-production.conf, and a copy with
+# port 8091 as early-compass-staging.conf, each included in its site's server block
+# ("include snippets/early-compass-….conf;" above "location /api/"). Backups of the site files
+# from before the change are in /etc/nginx/backup/.
+sudo nginx -t && sudo systemctl reload nginx
 ```

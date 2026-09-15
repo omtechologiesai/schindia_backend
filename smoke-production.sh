@@ -9,7 +9,7 @@
 set -u
 HOST="https://www.brainastra.com"
 KEY="$HOME/.ssh/shichida-ec2"
-EC2="ubuntu@15.206.125.114"
+EC2="ubuntu@13.234.196.14"
 
 echo "Minting a token on the production host..."
 TOK=$(ssh -i "$KEY" "$EC2" 'PID=$(systemctl show shichida -p MainPID --value)

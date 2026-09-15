@@ -164,12 +164,22 @@ async function enableExpiry(name: string, attribute: string): Promise<void> {
 }
 
 async function enablePointInTimeRecovery(name: string): Promise<boolean> {
-  const current = await dynamodb.send(new DescribeContinuousBackupsCommand({ TableName: name }));
-  if (current.ContinuousBackupsDescription?.PointInTimeRecoveryDescription?.PointInTimeRecoveryStatus === 'ENABLED') return false;
-  await dynamodb.send(
-    new UpdateContinuousBackupsCommand({ TableName: name, PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true } }),
-  );
-  return true;
+  // A table created moments ago refuses this ("Backups are being enabled for the table… retry
+  // later") until DynamoDB has finished preparing it, which can take a few minutes.
+  const deadline = Date.now() + 15 * 60_000;
+  for (;;) {
+    const current = await dynamodb.send(new DescribeContinuousBackupsCommand({ TableName: name }));
+    if (current.ContinuousBackupsDescription?.PointInTimeRecoveryDescription?.PointInTimeRecoveryStatus === 'ENABLED') return false;
+    try {
+      await dynamodb.send(
+        new UpdateContinuousBackupsCommand({ TableName: name, PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true } }),
+      );
+      return true;
+    } catch (error) {
+      if ((error as { name?: string }).name !== 'ContinuousBackupsUnavailableException' || Date.now() > deadline) throw error;
+      await sleep(15_000);
+    }
+  }
 }
 
 export async function setupTables(log: (message: string) => void = () => {}): Promise<void> {
@@ -204,11 +214,14 @@ export async function setupTables(log: (message: string) => void = () => {}): Pr
       }
     }
     if (spec.expiry) await enableExpiry(spec.name, spec.expiry);
-    if (config.appEnv === 'production' && !config.aws.dynamodbEndpoint && (await enablePointInTimeRecovery(spec.name))) {
-      log(`turned on point-in-time recovery for ${spec.name}`);
-    }
   }
   await seedChecklistOnce(log);
+  // Last, so new tables have had time to become eligible for backups.
+  if (config.appEnv === 'production' && !config.aws.dynamodbEndpoint) {
+    for (const spec of SPECS) {
+      if (await enablePointInTimeRecovery(spec.name)) log(`turned on point-in-time recovery for ${spec.name}`);
+    }
+  }
 }
 
 /** For production start-up: the process never creates tables, but refuses to run without them. */

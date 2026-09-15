@@ -2,6 +2,8 @@
 Description=Shichida Early Compass API (production, www.brainastra.com/compass)
 After=network-online.target
 Wants=network-online.target
+# Skipped, not failed, until the first release exists (otherwise it would restart in a loop).
+ConditionPathExists=/home/ubuntu/early-compass/dist/server/index.js
 
 [Service]
 User=ubuntu
