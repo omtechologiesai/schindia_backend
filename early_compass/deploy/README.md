@@ -45,7 +45,7 @@ sudo systemd-run --wait --pipe --collect -p User=ubuntu \
 ```
 
 It prints a generated password; add `--reset` for a new one. Staff can see and record every child;
-only admins can erase records, edit the checklist and manage accounts.
+only admins can erase records and manage accounts. Nobody can change the milestone questions.
 
 ## Checking
 

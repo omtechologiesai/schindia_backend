@@ -293,42 +293,19 @@ describe('recording an assessment', () => {
   });
 });
 
-describe('managing the milestone checklist', () => {
-  const removeItem = (id: string) => api(`/api/checklist/${encodeURIComponent(id)}`, { method: 'DELETE' });
+describe('the milestone checklist', () => {
+  it('is served in full and cannot be changed', async () => {
+    const checklist = (await (await api('/api/checklist')).json()) as ChecklistDTO;
+    expect(checklist.items['2-4'].physical).toHaveLength(36);
+    expect(checklist.items['2-4'].physical[0]!.id).toBe('2-4:physical:1');
+    const total = Object.values(checklist.items).flatMap((band) => Object.values(band)).reduce((n, list) => n + list.length, 0);
+    expect(total).toBe(480);
 
-  it('adds and removes questions, and new assessments use the questions in use', async () => {
-    const before = (await (await api('/api/checklist')).json()) as ChecklistDTO;
-    expect(before.items['2-4'].physical).toHaveLength(36);
-    expect(before.items['2-4'].physical[0]!.id).toBe('2-4:physical:1');
-
-    expect((await api('/api/checklist', { method: 'POST', json: { band: '2-4', domain: 'physical', text: '  ' } })).status).toBe(422);
-
-    const added = await api('/api/checklist', { method: 'POST', json: { band: '2-4', domain: 'physical', text: 'Can hop on one foot  three times' } });
-    expect(added.status).toBe(201);
-    const afterAdd = (await added.json()) as ChecklistDTO;
-    expect(afterAdd.items['2-4'].physical.at(-1)).toEqual({ id: '2-4:physical:37', text: 'Can hop on one foot three times' });
-    expect(afterAdd.version).not.toBe(before.version);
-
-    const duplicate = await api('/api/checklist', { method: 'POST', json: { band: '2-4', domain: 'physical', text: 'can hop on one foot three times' } });
-    expect(duplicate.status).toBe(409);
-
-    expect((await removeItem('2-4:physical:1')).status).toBe(200);
-    expect((await removeItem('2-4:physical:1')).status).toBe(404);
-
-    const res = await api('/api/assessments', { method: 'POST', json: { ...submission, observed: ['2-4:physical:2', '2-4:physical:37'] } });
-    expect(res.status).toBe(201);
-    const created = (await res.json()) as AssessmentDTO;
-    expect(created.stats.physical).toEqual({ done: 2, total: 36, pct: (2 / 36) * 100 });
-    expect(created.responses.some((response) => response.id === '2-4:physical:1')).toBe(false);
-    expect(created.responses.find((response) => response.id === '2-4:physical:37')?.text).toBe('Can hop on one foot three times');
-
-    const removedAnswer = await api('/api/assessments', { method: 'POST', json: { ...submission, observed: ['2-4:physical:1'] } });
-    expect(removedAnswer.status).toBe(422);
-  }, 60_000);
-
-  it('keeps at least one question in each area', async () => {
-    const list = ((await (await api('/api/checklist')).json()) as ChecklistDTO).items['4-6'].social;
-    for (const item of list.slice(1)) expect((await removeItem(item.id)).status).toBe(200);
-    expect((await removeItem(list[0]!.id)).status).toBe(409);
+    // Adding and removing questions was deliberately dropped: the endpoints no longer exist.
+    const added = await api('/api/checklist', { method: 'POST', json: { band: '2-4', domain: 'physical', text: 'Can hop on one foot' } });
+    expect(added.status).toBe(404);
+    const removed = await api('/api/checklist/2-4:physical:1', { method: 'DELETE' });
+    expect(removed.status).toBe(404);
+    expect(((await (await api('/api/checklist')).json()) as ChecklistDTO).items['2-4'].physical).toHaveLength(36);
   });
 });
