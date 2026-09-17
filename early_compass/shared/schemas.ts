@@ -69,17 +69,6 @@ export type ParentContact = z.infer<typeof parentContactSchema>;
 
 export const updateChildSchema = z.object({ child: childDetailsSchema, parent: parentContactSchema });
 
-export const checklistItemSchema = z.object({
-  band: z.enum(['0-2', '2-4', '4-6']),
-  domain: z.enum(['physical', 'sensory', 'language', 'social']),
-  text: z
-    .string()
-    .trim()
-    .min(1, 'Enter the question')
-    .max(300, 'Questions must be 300 characters or fewer')
-    .transform((v) => v.replace(/\s+/g, ' ')),
-});
-
 export const loginSchema = z.object({
   email: z.string().trim().toLowerCase().min(1, 'Email is required').max(120),
   password: z.string().min(1, 'Password is required').max(200),

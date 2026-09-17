@@ -132,9 +132,9 @@ parent was sent.
 - **Focus areas:** domains more than 4 points below the target, largest gap first, each with three activities (matching interests first) and the next three unticked milestones.
 - **Growth commentary:** compares with the child's previous assessment, but not across a band change.
 
-Administrators can add or remove questions under **Reference → Milestone checklist**. Each change
-adds a revision to the checklist version (e.g. `shichida-2016.1.r3`); saved assessments keep the
-questions they were answered with.
+The checklist is **read-only**: the questions are the original Shichida set, seeded once, and
+neither the portal nor the API can add, change or remove one. Each assessment still stores the
+wording it was answered with, so an old report can be regenerated exactly as it was.
 
 ## Disclaimers
 

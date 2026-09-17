@@ -24,11 +24,11 @@ import type {
   SyncStatus,
   UserDTO,
 } from '@shared/api';
-import { emptyBandItems, type BandItems, type Checklist, type ChecklistItem } from '@shared/checklist';
+import { emptyBandItems, type BandItems, type Checklist } from '@shared/checklist';
 import type { InterestKey } from '@shared/data/activities';
 import { CHECKLIST_VERSION } from '@shared/data/checklist';
 import type { GoalAge } from '@shared/data/goals';
-import { BANDS, itemId, type BandKey, type DomainKey } from '@shared/domain';
+import { BANDS, type BandKey, type DomainKey } from '@shared/domain';
 import { zonedParts } from '@shared/format';
 import type { ChildDetails, Gender, ParentContact, Relation } from '@shared/schemas';
 import type { Commentary, DomainStats, FocusAreaDetail } from '@shared/scoring';
@@ -37,8 +37,6 @@ import { config } from './config';
 import {
   ALL_ASSESSMENTS,
   batchWrite,
-  checklistItemKey,
-  counterIncrement,
   INDEX,
   isConditionFailure,
   nextCounter,
@@ -691,44 +689,39 @@ export const assessments = {
 
 /* ------------------------------------------------------------ checklist */
 
-export interface ChecklistItemRow {
-  id: string;
+interface StoredChecklistItem {
   band: BandKey;
-  domain: DomainKey;
-  text: string;
-  removed_at: string | null;
-}
-
-interface StoredChecklistItem extends ChecklistItemRow {
   item_key: string;
+  id: string;
+  domain: DomainKey;
   number: number;
   position: number;
+  text: string;
   created_by?: string | null;
   created_at: string;
   removed_by?: string | null;
+  removed_at?: string | null;
 }
 
 const CHECKLIST_REVISION = 'checklist-revision';
-const CHECKLIST_ITEM_ID = /^(0-2|2-4|4-6):(physical|sensory|language|social):([1-9]\d{0,3})$/;
 
-function checklistItemAddress(id: string): { band: BandKey; item_key: string } | null {
-  const match = CHECKLIST_ITEM_ID.exec(id);
-  return match ? { band: match[1] as BandKey, item_key: checklistItemKey(match[2] as DomainKey, Number(match[3])) } : null;
-}
-
-/** A band's questions, or one area's, in checklist order, including removed ones. */
-function storedItems(band: BandKey, domain?: DomainKey): Promise<StoredChecklistItem[]> {
+/** A band's questions in checklist order. */
+function storedItems(band: BandKey): Promise<StoredChecklistItem[]> {
   return queryAll<StoredChecklistItem>({
     TableName: TABLES.checklist,
-    KeyConditionExpression: domain ? '#band = :band AND begins_with(item_key, :domain)' : '#band = :band',
+    KeyConditionExpression: '#band = :band',
     ExpressionAttributeNames: { '#band': 'band' },
-    ExpressionAttributeValues: domain ? { ':band': band, ':domain': `${domain}#` } : { ':band': band },
+    ExpressionAttributeValues: { ':band': band },
     ConsistentRead: true,
   });
 }
 
 const inUse = (item: StoredChecklistItem) => !item.removed_at;
 
+/**
+ * Read-only. The questions are the original Shichida set, seeded once; nothing in the portal or the
+ * API adds, changes or removes one. Assessments still store the wording they were answered with.
+ */
 export const checklist = {
   /** Every question in use, per band and domain, in checklist order. */
   async current(): Promise<Checklist> {
@@ -744,79 +737,10 @@ export const checklist = {
     for (const item of (await storedItems(band)).filter(inUse)) result[item.domain].push({ id: item.id, text: item.text });
     return result;
   },
-  /** The base version, plus ".rN" once administrators have changed the questions N times. */
+  /** The base version, plus ".rN" if questions were ever changed, back when the portal allowed it. */
   async version(): Promise<string> {
     const revision = await readCounter(CHECKLIST_REVISION);
     return revision ? `${CHECKLIST_VERSION}.r${revision}` : CHECKLIST_VERSION;
-  },
-  async byId(id: string): Promise<ChecklistItemRow | undefined> {
-    const address = checklistItemAddress(id);
-    const item = address ? await getItem<StoredChecklistItem>(TABLES.checklist, address) : undefined;
-    return item ? { id: item.id, band: item.band, domain: item.domain, text: item.text, removed_at: item.removed_at ?? null } : undefined;
-  },
-  async activeCount(band: BandKey, domain: DomainKey): Promise<number> {
-    return (await storedItems(band, domain)).filter(inUse).length;
-  },
-  async hasText(band: BandKey, domain: DomainKey, text: string): Promise<boolean> {
-    const wanted = text.toLowerCase();
-    return (await storedItems(band, domain)).some((item) => inUse(item) && item.text.toLowerCase() === wanted);
-  },
-  /** Adds a question at the end of its list. Its number is never reused, even after it is removed. */
-  async add(input: { band: BandKey; domain: DomainKey; text: string; userId: string }): Promise<ChecklistItem> {
-    const number = (await storedItems(input.band, input.domain)).reduce((max, item) => Math.max(max, item.number), 0) + 1;
-    const item: StoredChecklistItem = {
-      band: input.band,
-      item_key: checklistItemKey(input.domain, number),
-      id: itemId(input.band, input.domain, number - 1),
-      domain: input.domain,
-      number,
-      position: number,
-      text: input.text,
-      created_by: input.userId,
-      created_at: nowIso(),
-      removed_by: null,
-      removed_at: null,
-    };
-    try {
-      await ddb.send(
-        new TransactWriteCommand({
-          TransactItems: [
-            { Put: { TableName: TABLES.checklist, Item: item, ConditionExpression: 'attribute_not_exists(item_key)' } },
-            counterIncrement(CHECKLIST_REVISION),
-          ],
-        }),
-      );
-    } catch (error) {
-      if (isConditionFailure(error)) throw new ConflictError('Someone added a question to this list at the same moment. Please try again.');
-      throw error;
-    }
-    return { id: item.id, text: item.text };
-  },
-  /** Takes a question out of new assessments; saved assessments keep their copy of it. */
-  async remove(id: string, userId: string): Promise<void> {
-    const address = checklistItemAddress(id);
-    if (!address) return;
-    try {
-      await ddb.send(
-        new TransactWriteCommand({
-          TransactItems: [
-            {
-              Update: {
-                TableName: TABLES.checklist,
-                Key: address,
-                UpdateExpression: 'SET removed_at = :ts, removed_by = :user',
-                ConditionExpression: 'attribute_exists(item_key) AND (attribute_not_exists(removed_at) OR removed_at = :none)',
-                ExpressionAttributeValues: { ':ts': nowIso(), ':user': userId, ':none': null },
-              },
-            },
-            counterIncrement(CHECKLIST_REVISION),
-          ],
-        }),
-      );
-    } catch (error) {
-      // Already removed by someone else: nothing left to do.
-      if (!isConditionFailure(error)) throw error;
-    }
   },
 };
 
