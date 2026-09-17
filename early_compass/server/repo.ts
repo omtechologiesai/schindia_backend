@@ -19,6 +19,7 @@ import type {
   DeliveryStatus,
   GoalResponseDTO,
   ReadingSummaryDTO,
+  ReportVariant,
   ResponseItemDTO,
   Role,
   SyncStatus,
@@ -403,6 +404,8 @@ export interface AssessmentRow {
   report_error: string | null;
   share_nonce: string;
   share_expires_at: string;
+  /** The report the parent's link opens: whichever was shared last. Absent on records from before short reports. */
+  share_variant?: ReportVariant;
   sync_status: SyncStatus;
   sync_attempts: number;
   sync_error: string | null;
@@ -566,6 +569,7 @@ export const assessments = {
       report_error: null,
       share_nonce: input.shareNonce,
       share_expires_at: input.shareExpiresAt,
+      share_variant: 'full',
       sync_status: input.syncStatus,
       sync_attempts: 0,
       sync_error: null,
@@ -663,6 +667,10 @@ export const assessments = {
   async rotateShare(id: string, nonce: string, expiresAt: string): Promise<void> {
     await setFields(TABLES.assessments, { id }, { share_nonce: nonce, share_expires_at: expiresAt, updated_at: nowIso() });
   },
+  /** Which report the parent's link opens from now on. */
+  async setShareVariant(id: string, variant: ReportVariant): Promise<void> {
+    await setFields(TABLES.assessments, { id }, { share_variant: variant, updated_at: nowIso() });
+  },
   async recordSync(id: string, sync: { status: SyncStatus; attempts: number; error: string | null; syncedAt: string | null }): Promise<void> {
     await setFields(TABLES.assessments, { id }, {
       sync_status: sync.status,
@@ -754,6 +762,8 @@ export interface DeliveryRow {
   recipient: string;
   status: DeliveryStatus;
   report_version: number;
+  /** Absent on deliveries sent before short reports existed; they were always the full report. */
+  report_variant?: ReportVariant;
   provider_message_id: string | null;
   error: string | null;
   /** Storage key of the saved .eml (preview mode only). */
@@ -770,6 +780,7 @@ export function toDeliveryDTO(row: DeliveryRow): DeliveryDTO {
     id: row.id,
     channel: row.channel,
     mode: row.mode,
+    reportVariant: row.report_variant ?? 'full',
     recipient: row.recipient,
     status: row.status,
     reportVersion: row.report_version,
@@ -819,6 +830,7 @@ export const deliveries = {
     recipient: string;
     status: DeliveryStatus;
     reportVersion: number;
+    reportVariant: ReportVariant;
     providerMessageId: string | null;
     error: string | null;
     previewPath: string | null;
@@ -832,6 +844,7 @@ export const deliveries = {
       recipient: input.recipient,
       status: input.status,
       report_version: input.reportVersion,
+      report_variant: input.reportVariant,
       provider_message_id: input.providerMessageId,
       error: input.error,
       preview_path: input.previewPath,
