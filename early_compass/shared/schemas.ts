@@ -74,12 +74,15 @@ export const loginSchema = z.object({
   password: z.string().min(1, 'Password is required').max(200),
 });
 
+export const reportVariantSchema = z.enum(['full', 'short']).default('full');
+
 export const shareEmailSchema = z.object({
   to: email,
   message: z.string().trim().max(1000, 'Message must be 1,000 characters or fewer'),
+  variant: reportVariantSchema,
 });
 
-export const shareWhatsAppSchema = z.object({ to: mobile });
+export const shareWhatsAppSchema = z.object({ to: mobile, variant: reportVariantSchema });
 
 const password = z.string().min(10, 'Password must be at least 10 characters').max(200);
 

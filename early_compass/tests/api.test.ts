@@ -8,6 +8,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { PDFDocument } from 'pdf-lib';
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import type { AssessmentDTO, ChecklistDTO } from '@shared/api';
 
@@ -198,6 +199,7 @@ describe('recording an assessment', () => {
     expect(res.status).toBe(200);
     const { delivery } = (await res.json()) as AssessmentDTO & { delivery: AssessmentDTO['deliveries'][number] };
     expect(delivery).toMatchObject({ channel: 'email', mode: 'preview', status: 'prepared', recipient: 'meera@example.org', sentBy: 'Priya Nair' });
+    expect(delivery.reportVariant).toBe('full');
     const eml = await (await api(delivery.previewUrl!)).text();
     expect(eml).toContain('To: meera@example.org');
     expect(eml).toContain('Content-Type: application/pdf');
@@ -233,6 +235,38 @@ describe('recording an assessment', () => {
     expect((await api(`/api/assessments/${first.id}/share-link/revoke`, { method: 'POST' })).status).toBe(200);
     expect((await fetch(base + pathname)).status).toBe(404);
   });
+
+  it('sends the short report when asked, and the parent link follows what was sent', async () => {
+    const pages = async (res: Response) => (await PDFDocument.load(await res.arrayBuffer())).getPageCount();
+    const full = await api(first.report.pdfUrl);
+    expect(await pages(full)).toBeGreaterThan(3);
+    expect(await pages(await api(first.report.shortPdfUrl))).toBe(3);
+
+    // Sharing the short report
+    const shared = await api(`/api/assessments/${first.id}/share/email`, {
+      method: 'POST',
+      json: { to: 'meera@example.org', message: '', variant: 'short' },
+    });
+    expect(shared.status).toBe(200);
+    const { delivery } = (await shared.json()) as { delivery: AssessmentDTO['deliveries'][number] };
+    expect(delivery.reportVariant).toBe('short');
+    const eml = await (await api(delivery.previewUrl!)).text();
+    expect(eml).toContain('Early-Compass_Aarav-Sharma_');
+    expect(eml).toContain('_short.pdf');
+
+    const record = (await (await api(`/api/assessments/${first.id}`)).json()) as AssessmentDTO;
+    expect(record.share.variant).toBe('short');
+    const shortLink = await fetch(`${new URL(record.share.url).pathname.replace('/compass', base + '/compass')}/report.pdf`);
+    expect(await pages(shortLink)).toBe(3);
+
+    // Sharing the complete report again puts the link back
+    await api(`/api/assessments/${first.id}/share/whatsapp`, { method: 'POST', json: { to: '+91 98765 43210', variant: 'full' } });
+    const after = (await (await api(`/api/assessments/${first.id}`)).json()) as AssessmentDTO;
+    expect(after.share.variant).toBe('full');
+    expect(after.deliveries[0]!.reportVariant).toBe('full');
+    const fullLink = await fetch(`${new URL(after.share.url).pathname.replace('/compass', base + '/compass')}/report.pdf`);
+    expect(await pages(fullLink)).toBeGreaterThan(3);
+  }, 60_000);
 
   it('corrects the details from an assessment and renders a new report version', async () => {
     const edit = (child: object, parent: object = {}) =>

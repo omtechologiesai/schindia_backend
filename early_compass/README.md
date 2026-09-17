@@ -21,7 +21,10 @@ It is built from the **Shape Early Compass** HTML tool. Carried over unchanged:
 3. **Tick the milestones** the child can do. The checklist band (0–2, 2–4 or 4–6 years) is picked from the child's age, and a live compass updates as you tick.
 4. **Optionally add goals, interests and notes.**
 5. **Review and save.** The server stores the record and creates the A4 PDF report and a shareable chart snapshot.
-6. **Share it** by email, WhatsApp or a private report link. Every send is logged against the record.
+6. **Share it** by email, WhatsApp or a private report link, choosing either the **complete report**
+   or the **short report** (its first 3 pages: the compass, focus areas and growth, without the full
+   answer list). Every send is logged with the version that went out, and the parent's link opens
+   whichever was shared last.
 
 ## Local development
 

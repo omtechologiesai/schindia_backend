@@ -1,5 +1,5 @@
 import { Router, type Request } from 'express';
-import type { AssessmentListItemDTO, EmailShareResult, Paginated, WhatsAppShareResult } from '@shared/api';
+import type { AssessmentListItemDTO, EmailShareResult, Paginated, ReportVariant, WhatsAppShareResult } from '@shared/api';
 import { formatDate } from '@shared/format';
 import { normalisePhone } from '@shared/phone';
 import { assessmentSubmissionSchema, shareEmailSchema, shareWhatsAppSchema, updateChildSchema } from '@shared/schemas';
@@ -13,6 +13,7 @@ import {
   errorMessage,
   generateReport,
   readReportFile,
+  readReportPdf,
   reportFileName,
   revokeShareLinks,
   shareUrl,
@@ -31,8 +32,8 @@ export async function findAssessment(req: Request): Promise<AssessmentRow> {
   return row;
 }
 
-async function reportPdfOrFail(row: AssessmentRow): Promise<Buffer> {
-  const pdf = await readReportFile(row, 'pdf');
+async function reportPdfOrFail(row: AssessmentRow, variant: ReportVariant): Promise<Buffer> {
+  const pdf = await readReportPdf(row, variant);
   if (!pdf) throw new HttpError(409, 'The report has not been generated yet. Use “Generate report” and try again.');
   return pdf;
 }
@@ -68,6 +69,7 @@ assessmentsRouter.get('/:id', async (req, res) => {
 
 const FILES = [
   { route: 'report.pdf', kind: 'pdf', contentType: 'application/pdf', suffix: '.pdf' },
+  { route: 'report-short.pdf', kind: 'pdf-short', contentType: 'application/pdf', suffix: '_short.pdf' },
   { route: 'chart.png', kind: 'chart', contentType: 'image/png', suffix: '_chart.png' },
   { route: 'snapshot.png', kind: 'snapshot', contentType: 'image/png', suffix: '_snapshot.png' },
 ] as const;
@@ -75,14 +77,14 @@ const FILES = [
 for (const file of FILES) {
   assessmentsRouter.get(`/:id/${file.route}`, async (req, res) => {
     const row = await findAssessment(req);
-    const data = await readReportFile(row, file.kind);
+    const data = file.kind === 'pdf-short' ? await readReportPdf(row, 'short') : await readReportFile(row, file.kind);
     if (!data) throw new HttpError(404, 'This file has not been generated yet.');
     const name = reportFileName(row).replace(/\.pdf$/, file.suffix);
     res.setHeader('Content-Type', file.contentType);
     res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${name}"`);
     res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
     // Chrome's built-in PDF viewer refuses to render under the app's object-src 'none' policy.
-    if (file.kind === 'pdf') res.removeHeader('Content-Security-Policy');
+    if (file.kind === 'pdf' || file.kind === 'pdf-short') res.removeHeader('Content-Security-Policy');
     res.send(data);
   });
 }
@@ -108,9 +110,9 @@ assessmentsRouter.post('/:id/regenerate', async (req, res) => {
 
 assessmentsRouter.post('/:id/share/email', async (req, res) => {
   const user = currentUser(req);
-  const { to, message } = parseBody(shareEmailSchema, req.body);
+  const { to, message, variant } = parseBody(shareEmailSchema, req.body);
   const found = await findAssessment(req);
-  const pdf = await reportPdfOrFail(found);
+  const pdf = await reportPdfOrFail(found, variant);
   const chartImage = await readReportFile(found, 'chart');
   const row = await ensureShareLink(found);
   const { detail, parentName, centre } = await currentContact(row);
@@ -122,6 +124,7 @@ assessmentsRouter.post('/:id/share/email', async (req, res) => {
     mode: emailMode,
     recipient: to.toLowerCase(),
     reportVersion: row.report_version,
+    reportVariant: variant,
     sentBy: user.id,
   };
   try {
@@ -141,9 +144,11 @@ assessmentsRouter.post('/:id/share/email', async (req, res) => {
       personalMessage: message,
       senderName: user.name,
       pdf,
-      pdfFileName: reportFileName(row, detail),
+      pdfFileName: reportFileName(row, detail, variant),
       chartImage,
     });
+    // The parent's link opens whatever they were just sent.
+    await assessments.setShareVariant(row.id, variant);
     let previewPath: string | null = null;
     if (result.previewEml) {
       previewPath = outboxKey(deliveryId);
@@ -165,10 +170,10 @@ assessmentsRouter.post('/:id/share/email', async (req, res) => {
 
 assessmentsRouter.post('/:id/share/whatsapp', async (req, res) => {
   const user = currentUser(req);
-  const { to } = parseBody(shareWhatsAppSchema, req.body);
+  const { to, variant } = parseBody(shareWhatsAppSchema, req.body);
   const phone = normalisePhone(to)!;
   const found = await findAssessment(req);
-  const pdf = await reportPdfOrFail(found);
+  const pdf = await reportPdfOrFail(found, variant);
   const row = await ensureShareLink(found);
   const { detail, parentName, centre } = await currentContact(row);
   const message = buildWhatsAppMessage({
@@ -186,12 +191,15 @@ assessmentsRouter.post('/:id/share/whatsapp', async (req, res) => {
     mode: whatsappMode,
     recipient: phone.e164,
     reportVersion: row.report_version,
+    reportVariant: variant,
     sentBy: user.id,
     previewPath: null,
   };
 
   if (whatsappMode === 'click_to_chat') {
     const delivery = await deliveries.create({ ...base, status: 'prepared', providerMessageId: null, error: null });
+    // The message carries the link, so the parent's link opens what staff chose here.
+    await assessments.setShareVariant(row.id, variant);
     res.json({ delivery: toDeliveryDTO(delivery), url: clickToChatUrl(phone.e164, message), message } satisfies WhatsAppShareResult);
     return;
   }
@@ -200,13 +208,14 @@ assessmentsRouter.post('/:id/share/whatsapp', async (req, res) => {
     const { messageId } = await sendReportViaCloudApi({
       to: phone.e164,
       pdf,
-      fileName: reportFileName(row, detail),
+      fileName: reportFileName(row, detail, variant),
       caption: message,
       parentName,
       childFirstName: detail.child.firstName,
       assessedAtText: formatDate(row.assessed_at, config.timeZone, 'long'),
     });
     const delivery = await deliveries.create({ ...base, status: 'sent', providerMessageId: messageId || null, error: null });
+    await assessments.setShareVariant(row.id, variant);
     res.json({ delivery: toDeliveryDTO(delivery), url: null, message } satisfies WhatsAppShareResult);
   } catch (error) {
     const delivery = await deliveries.create({ ...base, status: 'failed', providerMessageId: null, error: errorMessage(error) });

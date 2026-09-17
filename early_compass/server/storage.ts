@@ -18,10 +18,11 @@ function checkedId(id: string): string {
   return id;
 }
 
-export type ReportFileKind = 'pdf' | 'chart' | 'snapshot';
+export type ReportFileKind = 'pdf' | 'pdf-short' | 'chart' | 'snapshot';
 
 export function reportKey(assessmentId: string, version: number, kind: ReportFileKind): string {
-  const name = kind === 'pdf' ? `report-v${version}.pdf` : `${kind}-v${version}.png`;
+  const name =
+    kind === 'pdf' ? `report-v${version}.pdf` : kind === 'pdf-short' ? `report-short-v${version}.pdf` : `${kind}-v${version}.png`;
   return `reports/${checkedId(assessmentId)}/${name}`;
 }
 
@@ -33,7 +34,7 @@ export function outboxKey(deliveryId: string): string {
   return `outbox/${checkedId(deliveryId)}.eml`;
 }
 
-const VALID_KEY = /^(reports\/[0-9a-f-]{36}\/(report-v\d+\.pdf|(chart|snapshot)-v\d+\.png)|outbox\/[0-9a-f-]{36}\.eml)$/;
+const VALID_KEY = /^(reports\/[0-9a-f-]{36}\/(report(-short)?-v\d+\.pdf|(chart|snapshot)-v\d+\.png)|outbox\/[0-9a-f-]{36}\.eml)$/;
 const VALID_PREFIX = /^reports\/[0-9a-f-]{36}\/$/;
 
 function checkedKey(key: string): string {

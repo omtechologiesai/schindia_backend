@@ -2,7 +2,7 @@
  * Turns a stored assessment into files: the compass chart, the shareable snapshot card and
  * the PDF. Also owns parent share links and the assessment view model.
  */
-import type { AssessmentDTO } from '@shared/api';
+import type { AssessmentDTO, ReportVariant } from '@shared/api';
 import { DOMAIN_ORDER, type DomainKey } from '@shared/domain';
 import { formatAge, formatDate, todayISO } from '@shared/format';
 import type { DomainStats } from '@shared/scoring';
@@ -11,9 +11,13 @@ import { assessments, deliveries, parseAssessment, toDeliveryDTO, type Assessmen
 import { isValidShareSignature, parseShareToken, randomToken, shareToken } from '../security';
 import { files, reportKey, type ReportFileKind } from '../storage';
 import { renderChartPng, renderSnapshotPng } from './chart';
+import { firstPages } from './pdf';
 import { renderReportPdf } from './report-pdf';
 
 const DAY_MS = 86_400_000;
+
+/** The short report is the full one cut to this many pages: the summary, before the answer list. */
+export const SHORT_REPORT_PAGES = 3;
 
 const pctByDomain = (stats: DomainStats) =>
   Object.fromEntries(DOMAIN_ORDER.map((domain) => [domain, stats[domain].pct])) as Record<DomainKey, number>;
@@ -23,7 +27,7 @@ export function errorMessage(error: unknown): string {
 }
 
 /** "Early-Compass_Aarav-Sharma_2026-09-15.pdf" (ASCII only, safe for every mail client and WhatsApp). */
-export function reportFileName(row: AssessmentRow, detail: AssessmentDetail = parseAssessment(row)): string {
+export function reportFileName(row: AssessmentRow, detail: AssessmentDetail = parseAssessment(row), variant: ReportVariant = 'full'): string {
   const safe = (value: string) =>
     value
       .normalize('NFKD')
@@ -31,7 +35,8 @@ export function reportFileName(row: AssessmentRow, detail: AssessmentDetail = pa
       .trim()
       .replace(/\s+/g, '-') || 'Child';
   const day = todayISO(config.timeZone, new Date(row.assessed_at));
-  return `Early-Compass_${safe(detail.child.firstName)}-${safe(detail.child.lastName)}_${day}.pdf`;
+  const suffix = variant === 'short' ? '_short' : '';
+  return `Early-Compass_${safe(detail.child.firstName)}-${safe(detail.child.lastName)}_${day}${suffix}.pdf`;
 }
 
 /** Renders the next report version and records it. On failure the error is stored on the record and rethrown. */
@@ -86,6 +91,8 @@ export async function generateReport(assessmentId: string): Promise<AssessmentRo
       chartPng,
       contact: config.contact,
     });
+    const shortPdf = await firstPages(pdf, SHORT_REPORT_PAGES);
+    await files.put(reportKey(row.id, version, 'pdf-short'), shortPdf, 'application/pdf');
     await files.put(reportKey(row.id, version, 'chart'), chartPng, 'image/png');
     await files.put(reportKey(row.id, version, 'snapshot'), snapshotPng, 'image/png');
     await files.put(reportKey(row.id, version, 'pdf'), pdf, 'application/pdf');
@@ -100,6 +107,21 @@ export async function generateReport(assessmentId: string): Promise<AssessmentRo
 export async function readReportFile(row: AssessmentRow, kind: ReportFileKind): Promise<Buffer | null> {
   if (row.report_version < 1) return null;
   return files.get(reportKey(row.id, row.report_version, kind));
+}
+
+/**
+ * The PDF in the requested length. Records rendered before short reports existed have no short file
+ * stored, so it is cut from the full one the first time it is asked for, and kept.
+ */
+export async function readReportPdf(row: AssessmentRow, variant: ReportVariant): Promise<Buffer | null> {
+  if (variant === 'full') return readReportFile(row, 'pdf');
+  const stored = await readReportFile(row, 'pdf-short');
+  if (stored) return stored;
+  const full = await readReportFile(row, 'pdf');
+  if (!full) return null;
+  const short = await firstPages(full, SHORT_REPORT_PAGES);
+  await files.put(reportKey(row.id, row.report_version, 'pdf-short'), short, 'application/pdf');
+  return short;
 }
 
 /* ---------------------------------------------------------- share links */
@@ -168,10 +190,13 @@ export async function toAssessmentDTO(row: AssessmentRow): Promise<AssessmentDTO
       error: row.report_error,
       fileName: reportFileName(row, detail),
       pdfUrl: fileUrl('report.pdf'),
+      shortPdfUrl: fileUrl('report-short.pdf'),
+      shortFileName: reportFileName(row, detail, 'short'),
+      shortPages: SHORT_REPORT_PAGES,
       chartUrl: fileUrl('chart.png'),
       snapshotUrl: fileUrl('snapshot.png'),
     },
-    share: { url: shareUrl(row), expiresAt: row.share_expires_at },
+    share: { url: shareUrl(row), expiresAt: row.share_expires_at, variant: row.share_variant ?? 'full' },
     deliveries: (await deliveries.forAssessment(row.id)).map(toDeliveryDTO),
     sync: { status: row.sync_status, attempts: row.sync_attempts, error: row.sync_error, syncedAt: row.synced_at },
     createdAt: row.created_at,

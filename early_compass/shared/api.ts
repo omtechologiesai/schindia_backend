@@ -74,6 +74,8 @@ export interface GoalResponseDTO {
 }
 
 export type DeliveryChannel = 'email' | 'whatsapp';
+/** Which report was shared: every page, or just the first pages (SHORT_REPORT_PAGES). */
+export type ReportVariant = 'full' | 'short';
 export type DeliveryMode = 'ses' | 'smtp' | 'preview' | 'cloud_api' | 'click_to_chat';
 export type EmailMode = 'ses' | 'smtp' | 'preview';
 /** "prepared" = a click-to-chat message was opened for staff to send; delivery can't be confirmed. */
@@ -83,6 +85,7 @@ export interface DeliveryDTO {
   id: string;
   channel: DeliveryChannel;
   mode: DeliveryMode;
+  reportVariant: ReportVariant;
   recipient: string;
   status: DeliveryStatus;
   reportVersion: number;
@@ -145,10 +148,15 @@ export interface AssessmentDTO {
     error: string | null;
     fileName: string;
     pdfUrl: string;
+    /** The same report cut to its first pages, for parents who only need the summary. */
+    shortPdfUrl: string;
+    shortFileName: string;
+    shortPages: number;
     chartUrl: string;
     snapshotUrl: string;
   };
-  share: { url: string; expiresAt: string };
+  /** variant is the report the parent's link currently opens: whichever was shared last. */
+  share: { url: string; expiresAt: string; variant: ReportVariant };
   deliveries: DeliveryDTO[];
   sync: { status: SyncStatus; attempts: number; error: string | null; syncedAt: string | null };
   createdAt: string;

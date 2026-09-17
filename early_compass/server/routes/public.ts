@@ -11,7 +11,7 @@ import { BAND_LABEL } from '@shared/domain';
 import { formatDate } from '@shared/format';
 import { config } from '../config';
 import { parseAssessment } from '../repo';
-import { readReportFile, reportFileName, resolveShareToken } from '../services/reports';
+import { readReportFile, readReportPdf, reportFileName, resolveShareToken } from '../services/reports';
 
 const esc = (value: string) =>
   value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -93,13 +93,15 @@ publicRouter.get('/:token', async (req, res) => {
 
 publicRouter.get('/:token/report.pdf', async (req, res) => {
   const row = await resolveShareToken(String(req.params.token));
-  const pdf = row ? await readReportFile(row, 'pdf') : null;
+  // The report staff shared last: the whole thing, or its first pages.
+  const variant = row?.share_variant ?? 'full';
+  const pdf = row ? await readReportPdf(row, variant) : null;
   if (!row || !pdf) {
     res.status(404).type('html').send(unavailable());
     return;
   }
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${reportFileName(row)}"`);
+  res.setHeader('Content-Disposition', `${req.query.download ? 'attachment' : 'inline'}; filename="${reportFileName(row, undefined, variant)}"`);
   // Mobile and desktop browsers' PDF viewers refuse to render under the object-src 'none' policy.
   res.removeHeader('Content-Security-Policy');
   res.send(pdf);
