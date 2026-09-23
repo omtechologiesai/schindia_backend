@@ -279,6 +279,8 @@ def slot_attendance(request, centre_pk, slot_pk):
     return Response({
         'slot_id': str(slot_pk),
         'session_name': session.get('name', ''),
+        'start_date': slot.get('start_date'),
+        'end_date': slot.get('end_date'),
         'date': att_date,
         'children': children,
         'attendance_taken': any(c['status'] for c in children),
