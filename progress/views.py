@@ -218,7 +218,7 @@ class AttendanceViewSet(viewsets.ViewSet):
                 centre = centres_db.get_centre(str(child['centre_id']))
                 child['centre_name'] = centre.get('name', '') if centre else ''
 
-            session = sessions_db.get_session(str(session_id)) if session_id else None
+            session = sessions_db.get_session(str(session_id), centre_id=child.get('centre_id')) if session_id else None
 
             teacher_id = data.get('teacher_id') or data.get('teacher')
             teacher_name = None
@@ -345,7 +345,7 @@ def child_activity_feed(request, child_pk):
     if child.get('session_id'):
         has_enrolment = any(a.get('type') == 'enrolment' for a in activities)
         if not has_enrolment:
-            sess = sessions_db.get_session(str(child['session_id']))
+            sess = sessions_db.get_session(str(child['session_id']), centre_id=child.get('centre_id'))
             sess_name = sess.get('name') if sess else 'session'
             activities.append({
                 'type': 'enrolment',

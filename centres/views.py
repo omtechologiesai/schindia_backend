@@ -166,13 +166,6 @@ class CentreViewSet(viewsets.ViewSet):
             return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         # Block deletion if centre has dependent data
-        sessions = sessions_db.list_sessions(centre_id)
-        if sessions:
-            return Response(
-                {'detail': 'Cannot delete centre with existing sessions. Remove all sessions first.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         children = [c for c in children_db.list_children(centre_id)]
         if children:
             return Response(

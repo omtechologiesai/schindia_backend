@@ -4,22 +4,22 @@ from . import views
 
 router = DefaultRouter()
 
-# Standalone session/slot endpoints (for PATCH/DELETE by ID)
-router.register(r'sessions', views.SessionViewSet, basename='session-standalone')
+# Standalone slot endpoints (for PATCH/DELETE by ID)
 router.register(r'slots', views.SessionSlotViewSet, basename='slot-standalone')
 
 urlpatterns = [
-    # Nested under centre
+    # Sessions — static registry, read + per-centre config only
     path(
         'centres/<uuid:centre_pk>/sessions/',
-        views.SessionViewSet.as_view({'get': 'list', 'post': 'create'}),
+        views.SessionViewSet.as_view({'get': 'list'}),
         name='centre-sessions-list'
     ),
     path(
-        'centres/<uuid:centre_pk>/sessions/<uuid:pk>/',
-        views.SessionViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}),
+        'centres/<uuid:centre_pk>/sessions/<str:pk>/',
+        views.SessionViewSet.as_view({'get': 'retrieve', 'patch': 'update'}),
         name='centre-sessions-detail'
     ),
+    # Slots
     path(
         'centres/<uuid:centre_pk>/slots/',
         views.SessionSlotViewSet.as_view({'get': 'list', 'post': 'create'}),
