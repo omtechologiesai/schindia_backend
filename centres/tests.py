@@ -315,19 +315,8 @@ class CentreDestroyTests(CentresAPITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_destroy_blocked_by_existing_sessions(self, mock_centres_db, mock_sessions_db, mock_children_db, mock_roles_db):
-        mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "rooms": []}
-        mock_sessions_db.list_sessions.return_value = [{"id": "session-1"}]
-
-        resp = self.client.delete(f'/api/v1/centres/{CENTRE_ID}/')
-
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("sessions", resp.data["detail"])
-        mock_centres_db.delete_centre.assert_not_called()
-
     def test_destroy_blocked_by_enrolled_children(self, mock_centres_db, mock_sessions_db, mock_children_db, mock_roles_db):
         mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "rooms": []}
-        mock_sessions_db.list_sessions.return_value = []
         mock_children_db.list_children.return_value = [{"id": "child-1"}]
 
         resp = self.client.delete(f'/api/v1/centres/{CENTRE_ID}/')
@@ -338,7 +327,6 @@ class CentreDestroyTests(CentresAPITestCase):
 
     def test_destroy_blocked_by_active_role_members(self, mock_centres_db, mock_sessions_db, mock_children_db, mock_roles_db):
         mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "rooms": []}
-        mock_sessions_db.list_sessions.return_value = []
         mock_children_db.list_children.return_value = []
         mock_roles_db.list_roles.return_value = [{"id": "role-1", "members": [{"id": "member-1"}]}]
 

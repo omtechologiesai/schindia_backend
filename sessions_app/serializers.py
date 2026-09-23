@@ -2,43 +2,14 @@ from datetime import date as date_type
 
 from rest_framework import serializers
 
-# Predefined color palette for auto-assignment (Req 8.9)
-SESSION_COLORS = [
-    {'bg': '#e0f2fe', 'text': '#0369a1'},  # blue
-    {'bg': '#fce7f3', 'text': '#be185d'},  # pink
-    {'bg': '#dcfce7', 'text': '#166534'},  # green
-    {'bg': '#fef3c7', 'text': '#92400e'},  # amber
-    {'bg': '#ede9fe', 'text': '#5b21b6'},  # violet
-    {'bg': '#ffedd5', 'text': '#c2410c'},  # orange
-    {'bg': '#f0fdf4', 'text': '#15803d'},  # emerald
-    {'bg': '#fdf2f8', 'text': '#9d174d'},  # rose
-    {'bg': '#ecfeff', 'text': '#155e75'},  # cyan
-    {'bg': '#fef9c3', 'text': '#854d0e'},  # yellow
-    {'bg': '#f3e8ff', 'text': '#7e22ce'},  # purple
-    {'bg': '#e0e7ff', 'text': '#3730a3'},  # indigo
-]
-
-
-def get_next_color(centre_id):
-    """Pick the first colour from the palette not already in use at this centre."""
-    from dynamo_backend.services import sessions_db
-    existing_sessions = sessions_db.list_sessions(str(centre_id))
-    used_colors = {(s.get('color_bg'), s.get('color_text')) for s in existing_sessions}
-
-    for color in SESSION_COLORS:
-        if (color['bg'], color['text']) not in used_colors:
-            return color
-
-    # All colors used — cycle based on count
-    count = len(used_colors)
-    return SESSION_COLORS[count % len(SESSION_COLORS)]
+from dynamo_backend.services.sessions_service import DEFAULT_CHILD_LIMIT
 
 
 class SessionSerializer(serializers.Serializer):
-    id = serializers.UUIDField(read_only=True)
+    id = serializers.CharField(read_only=True)
     centre = serializers.CharField(source='centre_id', required=False)
     name = serializers.CharField(max_length=50)
-    child_limit = serializers.IntegerField(default=12)
+    child_limit = serializers.IntegerField(default=DEFAULT_CHILD_LIMIT)
     age_from = serializers.IntegerField(default=0)
     age_to = serializers.IntegerField(default=5)
     age_unit = serializers.ChoiceField(choices=['months', 'years'], default='years')
@@ -110,7 +81,7 @@ class SlotAttendanceMarkSerializer(serializers.Serializer):
 
 
 class GenerateSlotsSerializer(serializers.Serializer):
-    session_id = serializers.UUIDField()
+    session_id = serializers.CharField()
     room_id = serializers.UUIDField()
     start_time = serializers.TimeField()
     booking_type = serializers.ChoiceField(choices=['one-off', 'recurring'])

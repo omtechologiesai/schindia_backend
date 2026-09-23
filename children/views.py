@@ -22,8 +22,8 @@ def _resolve_enrolment_context(enrolment):
     slot_id = enrolment.get('slot_id') or enrolment.get('slot')
     child = children_db.get_child(str(child_id)) if child_id else None
     slot = sessions_db.get_slot(str(slot_id)) if slot_id else None
-    session = sessions_db.get_session(str(slot['session_id'])) if slot and slot.get('session_id') else None
     centre_id = (child or {}).get('centre_id') or (slot or {}).get('centre_id')
+    session = sessions_db.get_session(str(slot['session_id']), centre_id=centre_id) if slot and slot.get('session_id') else None
     centre = centres_db.get_centre(str(centre_id)) if centre_id else None
     room = centres_db.get_room(str(slot['room_id'])) if slot and slot.get('room_id') else None
     return child, slot, session, centre, room
