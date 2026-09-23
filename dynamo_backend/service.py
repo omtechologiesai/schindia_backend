@@ -69,15 +69,15 @@ class DynamoDBService:
         self.table.put_item(Item=serialized)
         return _deserialize_item(serialized)
 
-    def get(self, item_id: str) -> Optional[dict]:
+    def get(self, item_id: str, key_name: str = 'id') -> Optional[dict]:
         """Get a single item by ID."""
-        response = self.table.get_item(Key={'id': item_id})
+        response = self.table.get_item(Key={key_name: item_id})
         item = response.get('Item')
         if item:
             return _deserialize_item(item)
         return None
 
-    def update(self, item_id: str, updates: dict) -> Optional[dict]:
+    def update(self, item_id: str, updates: dict, key_name: str = 'id') -> Optional[dict]:
         """Update an item by ID. Returns updated item.
 
         A value of None removes that attribute (used to clear optional
@@ -102,7 +102,7 @@ class DynamoDBService:
                 expression_values[val_key] = _serialize_value(value)
 
         if not set_parts and not remove_parts:
-            return self.get(item_id)
+            return self.get(item_id, key_name=key_name)
 
         clauses = []
         if set_parts:
@@ -112,7 +112,7 @@ class DynamoDBService:
         update_expression = " ".join(clauses)
 
         kwargs = dict(
-            Key={'id': item_id},
+            Key={key_name: item_id},
             UpdateExpression=update_expression,
             ExpressionAttributeNames=expression_names,
             ReturnValues='ALL_NEW',
