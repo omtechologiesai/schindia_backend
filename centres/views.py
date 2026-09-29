@@ -74,6 +74,8 @@ class CentreViewSet(viewsets.ViewSet):
             email = request.user.email if hasattr(request.user, 'email') else ''
             roles_db.add_member(role['id'], user_id, name=name, email=email)
 
+        sessions_db.provision_centre_sessions(centre['id'])
+
         # Refresh centre to include rooms
         centre = centres_db.get_centre(centre['id'])
         return Response(centre, status=status.HTTP_201_CREATED)
@@ -186,6 +188,7 @@ class CentreViewSet(viewsets.ViewSet):
             centres_db.delete_room(room['id'])
         for role in roles:
             roles_db.delete_role(role['id'])
+        sessions_db.delete_centre_sessions(centre_id)
 
         centres_db.delete_centre(centre_id)
         return Response(status=status.HTTP_204_NO_CONTENT)

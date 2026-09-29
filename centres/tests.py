@@ -136,6 +136,12 @@ class CentreListRetrieveTests(CentresAPITestCase):
 @patch('centres.views.roles_db')
 @patch('centres.views.centres_db')
 class CentreCreateTests(CentresAPITestCase):
+    def setUp(self):
+        super().setUp()
+        patcher = patch('centres.views.sessions_db')
+        self.mock_sessions_db = patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_create_missing_required_fields_returns_400(self, mock_centres_db, mock_roles_db):
         # bank_details is deliberately excluded here — see the
         # test_create_silently_allows_bank_details_to_be_omitted_entirely gotcha below.
@@ -256,6 +262,9 @@ class CentreCreateTests(CentresAPITestCase):
         mock_centres_db.get_centre.assert_called_once_with(CENTRE_ID)
         self.assertEqual(resp.data["rooms"], [{"name": "Room 1"}])
 
+        # Each catalogue session gets its own row for the new centre
+        self.mock_sessions_db.provision_centre_sessions.assert_called_once_with(CENTRE_ID)
+
 
 # =============================================================================
 # CentreViewSet: partial_update
@@ -350,6 +359,7 @@ class CentreDestroyTests(CentresAPITestCase):
         mock_centres_db.delete_room.assert_any_call("room-1")
         mock_centres_db.delete_room.assert_any_call("room-2")
         mock_roles_db.delete_role.assert_called_once_with("role-1")
+        mock_sessions_db.delete_centre_sessions.assert_called_once_with(CENTRE_ID)
         mock_centres_db.delete_centre.assert_called_once_with(CENTRE_ID)
 
 

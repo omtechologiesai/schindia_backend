@@ -21,7 +21,7 @@ from rest_framework.test import APIClient
 from roles.access import UserAccess
 
 CENTRE_ID = "22222222-2222-2222-2222-222222222222"
-SESSION_ID = "chick"
+SESSION_ID = "33333333-3333-3333-3333-333333333333"
 SLOT_ID = "44444444-4444-4444-4444-444444444444"
 ROOM_ID = "66666666-6666-6666-6666-666666666666"
 USER_ID = "55555555-5555-5555-5555-555555555555"
@@ -518,3 +518,68 @@ class SessionsEnforcementTests(SessionsAPITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
         mock_centres_db.get_centre.assert_not_called()
+
+
+# =============================================================================
+# SessionsDynamoService: one row per centre per catalogue session
+# =============================================================================
+
+class SessionsServiceTests(SimpleTestCase):
+    def setUp(self):
+        from dynamo_backend.services.sessions_service import SessionsDynamoService
+        with patch('dynamo_backend.services.sessions_service.DynamoDBService'):
+            self.service = SessionsDynamoService()
+        self.table = self.service.sessions
+
+    def _row(self, slug, **extra):
+        return {"id": f"id-{slug}", "centre_id": CENTRE_ID, "slug": slug,
+                "session_key": f"{CENTRE_ID}#{slug}", **extra}
+
+    def test_provision_creates_a_uuid_row_per_catalogue_session(self):
+        self.table.query_by_index.return_value = []
+
+        self.service.provision_centre_sessions(CENTRE_ID)
+
+        created = [c.args[0] for c in self.table.create.call_args_list]
+        self.assertEqual([r["slug"] for r in created],
+                         ["chick", "bunny", "kitty", "puppy", "bear", "giraffe"])
+        self.assertEqual(len({r["id"] for r in created}), 6)
+        self.assertEqual(created[0]["session_key"], f"{CENTRE_ID}#chick")
+
+    def test_provision_skips_sessions_the_centre_already_has(self):
+        self.table.query_by_index.return_value = [self._row("chick"), self._row("bunny")]
+
+        self.service.provision_centre_sessions(CENTRE_ID)
+
+        created = [c.args[0]["slug"] for c in self.table.create.call_args_list]
+        self.assertEqual(created, ["kitty", "puppy", "bear", "giraffe"])
+
+    def test_list_ignores_rows_left_by_the_previous_design(self):
+        legacy = {"id": f"{CENTRE_ID}#kitty", "centre_id": CENTRE_ID, "slug": "kitty", "child_limit": 3}
+        self.table.query_by_index.return_value = [self._row("chick"), legacy]
+
+        sessions = self.service.list_sessions(CENTRE_ID)
+
+        self.assertEqual([s["id"] for s in sessions], ["id-chick"])
+        self.assertEqual(sessions[0]["name"], "Chick")
+
+    def test_get_session_rejects_another_centres_session(self):
+        self.table.get.return_value = self._row("chick")
+
+        self.assertIsNone(self.service.get_session("id-chick", "some-other-centre"))
+        self.assertEqual(self.service.get_session("id-chick", CENTRE_ID)["slug"], "chick")
+
+    def test_update_writes_only_allowed_fields_to_the_row(self):
+        self.table.get.return_value = self._row("chick")
+        self.table.update.return_value = self._row("chick", child_limit=12)
+
+        result = self.service.update_session(CENTRE_ID, "id-chick", {"child_limit": 12, "name": "X"})
+
+        self.table.update.assert_called_once_with("id-chick", {"child_limit": 12})
+        self.assertEqual(result["child_limit"], 12)
+
+    def test_update_refuses_another_centres_session(self):
+        self.table.get.return_value = self._row("chick")
+
+        self.assertIsNone(self.service.update_session("some-other-centre", "id-chick", {"child_limit": 12}))
+        self.table.update.assert_not_called()

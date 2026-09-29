@@ -1,11 +1,13 @@
-"""Sessions are a fixed static registry shared by every centre.
+"""Sessions: a fixed catalogue, with one row per centre per catalogue session.
 
-The 6 sessions (Chick..Giraffe) are hardcoded here — their name, age range and
-colour cannot be changed. Only per-centre overrides for child_limit and duration
-are persisted, in the Sessions Dynamo table keyed by ``{centre_id}#{slug}``.
+The 6 sessions (Chick..Giraffe) are defined here — their name, age range and
+colour cannot be changed. Each centre gets its own row for each of them in the
+Sessions table, created when the centre is created: a UUID ``id`` (the only
+uniqueness the table enforces), the ``slug`` linking it to the catalogue, a
+readable ``session_key`` of ``{centre_id}#{slug}``, and that centre's
+child_limit and duration.
 
-Slots reference a session by its slug (e.g. ``session_id="chick"``); they carry
-their own ``centre_id`` so lookups stay unambiguous.
+Slots reference a session by its row id, which already identifies the centre.
 """
 
 import logging
@@ -45,33 +47,44 @@ class SessionsDynamoService:
         self.sessions = DynamoDBService(SESSIONS_TABLE)
         self.slots = DynamoDBService(SESSION_SLOTS_TABLE)
 
-    # ── Sessions (static registry + per-centre overrides) ──────────────
+    # ── Sessions (catalogue + one row per centre) ──────────────────────
+
+    def provision_centre_sessions(self, centre_id):
+        """Create a row for each catalogue session this centre doesn't have yet. Safe to re-run."""
+        centre_id = str(centre_id)
+        existing = {r.get('slug') for r in self._centre_rows(centre_id)}
+        for static in STATIC_SESSIONS:
+            if static['slug'] in existing:
+                continue
+            self.sessions.create({
+                'id': str(uuid.uuid4()),
+                'centre_id': centre_id,
+                'slug': static['slug'],
+                'session_key': f"{centre_id}#{static['slug']}",
+                'child_limit': DEFAULT_CHILD_LIMIT,
+                'duration_hours': DEFAULT_DURATION_HOURS,
+                'duration_minutes': DEFAULT_DURATION_MINUTES,
+            })
 
     def list_sessions(self, centre_id):
-        """Return the 6 static sessions for a centre with overrides merged in."""
-        centre_id = str(centre_id)
-        overrides = self.sessions.query_by_index('centre_id-index', 'centre_id', centre_id)
-        by_slug = {o.get('slug'): o for o in overrides}
-        return [
-            self._build(centre_id, static, by_slug.get(static['slug']))
-            for static in STATIC_SESSIONS
-        ]
+        """This centre's sessions, in catalogue order."""
+        by_slug = {r['slug']: r for r in self._centre_rows(str(centre_id))}
+        return [self._build(by_slug[s['slug']]) for s in STATIC_SESSIONS if s['slug'] in by_slug]
 
     def get_session(self, session_id, centre_id):
-        """Look up a session by slug, with that centre's overrides folded in."""
-        static = _STATIC_BY_SLUG.get(str(session_id))
-        if not static:
+        """Look up a session by its id. When centre_id is given, the session must belong to it."""
+        row = self.sessions.get(str(session_id))
+        if not self._is_session_row(row):
             return None
-        override = None
-        if centre_id:
-            override = self.sessions.get(self._pk(centre_id, session_id))
-        return self._build(str(centre_id or ''), static, override)
+        if centre_id and row.get('centre_id') != str(centre_id):
+            return None
+        return self._build(row)
 
     def update_session(self, centre_id, session_id, updates):
-        """Upsert per-centre override. Only child_limit and duration are writable."""
+        """Update a centre's session. Only child_limit and duration are writable."""
         session_id = str(session_id)
-        centre_id = str(centre_id)
-        if session_id not in _STATIC_BY_SLUG:
+        row = self.sessions.get(session_id)
+        if not self._is_session_row(row) or row.get('centre_id') != str(centre_id):
             logger.warning(f"Attempted to update non-existent session: {session_id}")
             return None
         allowed = {
@@ -79,38 +92,40 @@ class SessionsDynamoService:
             for k in ('child_limit', 'duration_hours', 'duration_minutes')
             if k in updates
         }
-        pk = self._pk(centre_id, session_id)
-        existing = self.sessions.get(pk)
-        if existing:
-            row = self.sessions.update(pk, allowed) if allowed else existing
-        else:
-            row = self.sessions.create({
-                'id': pk,
-                'centre_id': centre_id,
-                'slug': session_id,
-                **allowed,
-            })
-        return self._build(centre_id, _STATIC_BY_SLUG[session_id], row)
+        if allowed:
+            row = self.sessions.update(session_id, allowed)
+        return self._build(row)
+
+    def delete_centre_sessions(self, centre_id):
+        for row in self.sessions.query_by_index('centre_id-index', 'centre_id', str(centre_id)):
+            self.sessions.delete(row['id'])
+
+    def _centre_rows(self, centre_id):
+        rows = self.sessions.query_by_index('centre_id-index', 'centre_id', centre_id)
+        return [r for r in rows if self._is_session_row(r)]
 
     @staticmethod
-    def _pk(centre_id, slug):
-        return f"{centre_id}#{slug}"
+    def _is_session_row(row):
+        # session_key marks rows made by provisioning; this skips override rows
+        # left by the previous design and any slug no longer in the catalogue.
+        return bool(row) and 'session_key' in row and row.get('slug') in _STATIC_BY_SLUG
 
     @staticmethod
-    def _build(centre_id, static, override):
-        override = override or {}
+    def _build(row):
+        static = _STATIC_BY_SLUG[row['slug']]
         return {
-            'id': static['slug'],
-            'centre_id': centre_id,
+            'id': row['id'],
+            'centre_id': row.get('centre_id', ''),
+            'slug': row['slug'],
             'name': static['name'],
             'age_from': static['age_from'],
             'age_to': static['age_to'],
             'age_unit': static['age_unit'],
             'color_bg': static['color_bg'],
             'color_text': static['color_text'],
-            'child_limit': int(override.get('child_limit', DEFAULT_CHILD_LIMIT)),
-            'duration_hours': int(override.get('duration_hours', DEFAULT_DURATION_HOURS)),
-            'duration_minutes': int(override.get('duration_minutes', DEFAULT_DURATION_MINUTES)),
+            'child_limit': int(row.get('child_limit', DEFAULT_CHILD_LIMIT)),
+            'duration_hours': int(row.get('duration_hours', DEFAULT_DURATION_HOURS)),
+            'duration_minutes': int(row.get('duration_minutes', DEFAULT_DURATION_MINUTES)),
         }
 
     # ── Slots ──────────────────────────────────────────────────────────

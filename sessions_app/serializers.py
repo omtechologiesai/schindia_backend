@@ -6,7 +6,7 @@ from dynamo_backend.services.sessions_service import DEFAULT_CHILD_LIMIT
 
 
 class SessionSerializer(serializers.Serializer):
-    id = serializers.CharField(read_only=True)
+    id = serializers.UUIDField(read_only=True)
     centre = serializers.CharField(source='centre_id', required=False)
     name = serializers.CharField(max_length=50)
     child_limit = serializers.IntegerField(default=DEFAULT_CHILD_LIMIT)
@@ -81,7 +81,7 @@ class SlotAttendanceMarkSerializer(serializers.Serializer):
 
 
 class GenerateSlotsSerializer(serializers.Serializer):
-    session_id = serializers.CharField()
+    session_id = serializers.UUIDField()
     room_id = serializers.UUIDField()
     start_time = serializers.TimeField()
     booking_type = serializers.ChoiceField(choices=['one-off', 'recurring'])

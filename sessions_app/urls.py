@@ -15,7 +15,7 @@ urlpatterns = [
         name='centre-sessions-list'
     ),
     path(
-        'centres/<uuid:centre_pk>/sessions/<str:pk>/',
+        'centres/<uuid:centre_pk>/sessions/<uuid:pk>/',
         views.SessionViewSet.as_view({'get': 'retrieve', 'patch': 'update'}),
         name='centre-sessions-detail'
     ),
