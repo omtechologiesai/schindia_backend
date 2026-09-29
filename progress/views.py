@@ -285,10 +285,11 @@ class CourseProgressViewSet(viewsets.ViewSet):
         if resp:
             return resp
 
-        data = request.data.copy()
+        serializer = CourseProgressSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         # Check if progress already exists (upsert semantics)
         existing = progress_db.get_course_progress(str(child_pk))
-        progress = progress_db.set_course_progress(str(child_pk), data)
+        progress = progress_db.set_course_progress(str(child_pk), serializer.validated_data)
         if existing:
             return Response(progress, status=status.HTTP_200_OK)
         return Response(progress, status=status.HTTP_201_CREATED)
@@ -314,7 +315,9 @@ class CourseProgressViewSet(viewsets.ViewSet):
         resp = _require_child_centre_access(request, child_pk)
         if resp:
             return resp
-        progress = progress_db.set_course_progress(str(child_pk), request.data)
+        serializer = CourseProgressSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        progress = progress_db.set_course_progress(str(child_pk), serializer.validated_data)
         return Response(progress)
 
 

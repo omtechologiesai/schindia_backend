@@ -123,9 +123,9 @@ class DynamoDBService:
         response = self.table.update_item(**kwargs)
         return _deserialize_item(response.get('Attributes', {}))
 
-    def delete(self, item_id: str) -> bool:
+    def delete(self, item_id: str, key_name: str = 'id') -> bool:
         """Delete an item by ID."""
-        self.table.delete_item(Key={'id': item_id})
+        self.table.delete_item(Key={key_name: item_id})
         return True
 
     def list_all(self) -> list:
@@ -191,9 +191,9 @@ class DynamoDBService:
                 created.append(_deserialize_item(serialized))
         return created
 
-    def batch_delete(self, item_ids: list) -> bool:
+    def batch_delete(self, item_ids: list, key_name: str = 'id') -> bool:
         """Delete multiple items by ID."""
         with self.table.batch_writer() as batch:
             for item_id in item_ids:
-                batch.delete_item(Key={'id': item_id})
+                batch.delete_item(Key={key_name: item_id})
         return True
