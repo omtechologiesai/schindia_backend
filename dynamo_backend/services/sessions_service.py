@@ -21,17 +21,17 @@ logger = logging.getLogger(__name__)
 DAY_MAP = {0: 'mon', 1: 'tue', 2: 'wed', 3: 'thu', 4: 'fri', 5: 'sat', 6: 'sun'}
 
 STATIC_SESSIONS = [
-    {'slug': 'chick',   'name': 'Chick',   'age_from': 6, 'age_to': 18, 'age_unit': 'months',
+    {'slug': 'chick',   'name': 'Chick',   'age_from': 6,  'age_to': 15, 'age_unit': 'months',
      'color_bg': '#fef3c7', 'color_text': '#92400e'},
-    {'slug': 'bunny',   'name': 'Bunny',   'age_from': 2, 'age_to': 2,  'age_unit': 'years',
+    {'slug': 'bunny',   'name': 'Bunny',   'age_from': 16, 'age_to': 27, 'age_unit': 'months',
      'color_bg': '#fce7f3', 'color_text': '#be185d'},
-    {'slug': 'kitty',   'name': 'Kitty',   'age_from': 3, 'age_to': 3,  'age_unit': 'years',
+    {'slug': 'kitty',   'name': 'Kitty',   'age_from': 28, 'age_to': 39, 'age_unit': 'months',
      'color_bg': '#e0f2fe', 'color_text': '#0369a1'},
-    {'slug': 'puppy',   'name': 'Puppy',   'age_from': 4, 'age_to': 4,  'age_unit': 'years',
+    {'slug': 'puppy',   'name': 'Puppy',   'age_from': 40, 'age_to': 51, 'age_unit': 'months',
      'color_bg': '#dcfce7', 'color_text': '#166534'},
-    {'slug': 'bear',    'name': 'Bear',    'age_from': 5, 'age_to': 5,  'age_unit': 'years',
+    {'slug': 'bear',    'name': 'Bear',    'age_from': 52, 'age_to': 63, 'age_unit': 'months',
      'color_bg': '#ede9fe', 'color_text': '#5b21b6'},
-    {'slug': 'giraffe', 'name': 'Giraffe', 'age_from': 6, 'age_to': 6,  'age_unit': 'years',
+    {'slug': 'giraffe', 'name': 'Giraffe', 'age_from': 64, 'age_to': 75, 'age_unit': 'months',
      'color_bg': '#ecfeff', 'color_text': '#155e75'},
 ]
 
