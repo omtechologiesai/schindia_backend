@@ -7,6 +7,7 @@ from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import sessions_db, centres_db, children_db, progress_db
+from dynamo_backend.services.sessions_service import DEFAULT_CHILD_LIMIT
 from roles.access import get_user_access, centre_not_found
 from .serializers import SessionSerializer, SessionSlotSerializer, GenerateSlotsSerializer, SlotAttendanceMarkSerializer
 
@@ -34,7 +35,8 @@ class SessionViewSet(viewsets.ViewSet):
         return Response(sessions)
 
     def retrieve(self, request, *args, **kwargs):
-        session = sessions_db.get_session(str(kwargs['pk']))
+        centre_pk = self.kwargs.get('centre_pk')
+        session = sessions_db.get_session(str(kwargs['pk']), centre_id=str(centre_pk))
         if not session:
             return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
         access = get_user_access(request.user, request)
@@ -42,33 +44,33 @@ class SessionViewSet(viewsets.ViewSet):
             return centre_not_found('Session not found.')
         return Response(session)
 
-    def create(self, request, *args, **kwargs):
+    def update(self, request, *args, **kwargs):
+        """Update a session's per-centre config. Name, age range and colour are
+        fixed by the static catalogue, so only these three fields are writable."""
         centre_pk = self.kwargs.get('centre_pk')
-        if not centre_pk:
-            return Response({'detail': 'A centre is required to create a session.'}, status=status.HTTP_400_BAD_REQUEST)
         access = get_user_access(request.user, request)
         if not access.can_access_centre(centre_pk):
-            return centre_not_found()
+            return centre_not_found('Session not found.')
 
-        from .serializers import get_next_color
+        session = sessions_db.get_session(str(kwargs['pk']), centre_id=str(centre_pk))
+        if not session:
+            return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        data = request.data.copy()
+        updates = {
+            field: request.data[field]
+            for field in ('child_limit', 'duration_hours', 'duration_minutes')
+            if field in request.data
+        }
 
-        # Validate using the serializer (Req 8.8 — name uniqueness, duration, age, child_limit)
-        # We need to check name uniqueness against Dynamo
-        name = data.get('name', '')
-        if name:
-            existing_sessions = sessions_db.list_sessions(str(centre_pk))
-            for s in existing_sessions:
-                if s.get('name', '').lower() == name.lower():
-                    return Response(
-                        {'name': ['A session with this name already exists at this centre.']},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+        child_limit = int(updates.get('child_limit', session['child_limit']))
+        if child_limit < 1 or child_limit > 50:
+            return Response(
+                {'child_limit': ['Child limit must be between 1 and 50.']},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # Validate duration
-        hours = int(data.get('duration_hours', 1))
-        minutes = int(data.get('duration_minutes', 30))
+        hours = int(updates.get('duration_hours', session['duration_hours']))
+        minutes = int(updates.get('duration_minutes', session['duration_minutes']))
         total_minutes = hours * 60 + minutes
         if total_minutes < 30:
             return Response(
@@ -81,75 +83,8 @@ class SessionViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Validate child_limit
-        child_limit = int(data.get('child_limit', 12))
-        if child_limit < 1 or child_limit > 50:
-            return Response(
-                {'child_limit': ['Child limit must be between 1 and 50.']},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Validate age range
-        age_from = int(data.get('age_from', 0))
-        age_to = int(data.get('age_to', 5))
-        if age_from >= age_to:
-            return Response(
-                {'age_from': ['age_from must be less than age_to.']},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        data.pop('centre', None)
-        # Auto-assign color (Req 8.9 — first unused colour)
-        color = get_next_color(centre_pk)
-        data['color_bg'] = color['bg']
-        data['color_text'] = color['text']
-        session = sessions_db.create_session(str(centre_pk), data)
-        return Response(session, status=status.HTTP_201_CREATED)
-
-    def partial_update(self, request, *args, **kwargs):
-        session = sessions_db.get_session(str(kwargs['pk']))
-        if not session:
-            return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-        # Scope check: ensure session belongs to the centre in the URL
-        centre_pk = self.kwargs.get('centre_pk')
-        if centre_pk and session.get('centre_id') != str(centre_pk):
-            return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-        access = get_user_access(request.user, request)
-        if not access.can_access_centre(session.get('centre_id')):
-            return centre_not_found('Session not found.')
-
-        updated = sessions_db.update_session(str(kwargs['pk']), request.data)
+        updated = sessions_db.update_session(str(centre_pk), str(kwargs['pk']), updates)
         return Response(updated)
-
-    def destroy(self, request, *args, **kwargs):
-        session = sessions_db.get_session(str(kwargs['pk']))
-        if not session:
-            return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-        # Scope check
-        centre_pk = self.kwargs.get('centre_pk')
-        if centre_pk and session.get('centre_id') != str(centre_pk):
-            return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-        access = get_user_access(request.user, request)
-        if not access.can_access_centre(session.get('centre_id')):
-            return centre_not_found('Session not found.')
-
-        # Check for dependent slots (same guard as Room deletion — Req 5.7)
-        centre_id = session.get('centre_id', str(centre_pk) if centre_pk else '')
-        if centre_id:
-            slots = sessions_db.list_slots(centre_id)
-            dependent_slots = [s for s in slots if s.get('session_id') == str(kwargs['pk'])]
-            if dependent_slots:
-                return Response(
-                    {'detail': 'Cannot delete session with existing timetable slots. Remove slots first.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-        sessions_db.delete_session(str(kwargs['pk']))
-        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class SessionSlotViewSet(viewsets.ViewSet):
@@ -189,7 +124,7 @@ class SessionSlotViewSet(viewsets.ViewSet):
         # Validate session exists
         session_id = data.get('session_id') or data.get('session')
         if session_id:
-            session = sessions_db.get_session(str(session_id))
+            session = sessions_db.get_session(str(session_id), centre_id=str(centre_pk))
             if not session:
                 return Response({'detail': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -307,7 +242,7 @@ def slot_attendance(request, centre_pk, slot_pk):
         return centre_not_found('Slot not found.')
 
     att_date = request.query_params.get('date') or date.today().isoformat()
-    session = sessions_db.get_session(slot.get('session_id')) or {}
+    session = sessions_db.get_session(slot.get('session_id'), centre_id=str(centre_pk)) or {}
 
     records_by_child = {
         r['child_id']: r for r in progress_db.list_attendance_by_slot(str(slot_pk), att_date)
@@ -530,7 +465,7 @@ def _timetable_dynamo(request, centre_id, week_start, week_end):
             'start_time': start_time,
             'end_time': f"{end_hours:02d}:{end_mins:02d}",
             'children_enrolled': children_count,
-            'child_limit': session.get('child_limit', 12),
+            'child_limit': session.get('child_limit', DEFAULT_CHILD_LIMIT),
             'starting_month': slot.get('starting_month', 1),
             'starting_week': slot.get('starting_week', 1),
             'booking_type': slot.get('booking_type', 'recurring'),

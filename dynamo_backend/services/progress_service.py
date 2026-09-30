@@ -182,7 +182,7 @@ class ProgressDynamoService:
                 if not session_name and enr.get('slot_id'):
                     slot = sessions_svc.get_slot(enr['slot_id'])
                     if slot and slot.get('session_id'):
-                        sess = sessions_svc.get_session(slot['session_id'])
+                        sess = sessions_svc.get_session(slot['session_id'], centre_id=slot.get('centre_id'))
                         if sess:
                             session_name = sess.get('name')
                 activities.append({

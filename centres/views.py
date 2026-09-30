@@ -74,6 +74,8 @@ class CentreViewSet(viewsets.ViewSet):
             email = request.user.email if hasattr(request.user, 'email') else ''
             roles_db.add_member(role['id'], user_id, name=name, email=email)
 
+        sessions_db.provision_centre_sessions(centre['id'])
+
         # Refresh centre to include rooms
         centre = centres_db.get_centre(centre['id'])
         return Response(centre, status=status.HTTP_201_CREATED)
@@ -166,13 +168,6 @@ class CentreViewSet(viewsets.ViewSet):
             return Response({'detail': 'Centre not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         # Block deletion if centre has dependent data
-        sessions = sessions_db.list_sessions(centre_id)
-        if sessions:
-            return Response(
-                {'detail': 'Cannot delete centre with existing sessions. Remove all sessions first.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         children = [c for c in children_db.list_children(centre_id)]
         if children:
             return Response(
@@ -193,6 +188,7 @@ class CentreViewSet(viewsets.ViewSet):
             centres_db.delete_room(room['id'])
         for role in roles:
             roles_db.delete_role(role['id'])
+        sessions_db.delete_centre_sessions(centre_id)
 
         centres_db.delete_centre(centre_id)
         return Response(status=status.HTTP_204_NO_CONTENT)

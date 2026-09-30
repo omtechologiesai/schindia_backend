@@ -43,3 +43,4 @@ nginx.conf
 # AWS
 .aws/credentials
 *.zip
+.claude/
