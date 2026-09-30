@@ -516,6 +516,65 @@ class CourseProgressViewSetTests(ProgressAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
         mock_progress_db.set_course_progress.assert_not_called()
 
+    def test_create_rejects_month_out_of_range(self, mock_progress_db):
+        resp = self.client.post(f'/api/v1/children/{CHILD_ID}/course-progress/', {"currentMonth": 99}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_progress_db.set_course_progress.assert_not_called()
+
+    def test_create_drops_unknown_fields(self, mock_progress_db):
+        mock_progress_db.get_course_progress.return_value = None
+        mock_progress_db.set_course_progress.return_value = {"child_id": CHILD_ID}
+
+        self.client.post(
+            f'/api/v1/children/{CHILD_ID}/course-progress/',
+            {"currentMonth": 2, "currentWeek": 3, "isAdmin": True},
+            format='json',
+        )
+
+        mock_progress_db.set_course_progress.assert_called_once_with(
+            CHILD_ID, {"current_month": 2, "current_week": 3}
+        )
+
+    def test_nested_partial_update_rejects_week_out_of_range(self, mock_progress_db):
+        resp = self.client.patch(
+            f'/api/v1/children/{CHILD_ID}/course-progress/{CHILD_ID}/', {"currentWeek": 5}, format='json'
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        mock_progress_db.set_course_progress.assert_not_called()
+
+    def test_nested_partial_update_does_not_default_other_field(self, mock_progress_db):
+        mock_progress_db.set_course_progress.return_value = {"child_id": CHILD_ID}
+
+        self.client.patch(
+            f'/api/v1/children/{CHILD_ID}/course-progress/{CHILD_ID}/', {"currentWeek": 3}, format='json'
+        )
+
+        mock_progress_db.set_course_progress.assert_called_once_with(CHILD_ID, {"current_week": 3})
+
+
+class CourseProgressServiceTests(SimpleTestCase):
+    def setUp(self):
+        from dynamo_backend.services.progress_service import ProgressDynamoService
+        with patch('dynamo_backend.services.progress_service.DynamoDBService'):
+            self.service = ProgressDynamoService()
+        self.table = self.service.course_progress
+
+    def test_set_writes_display_merged_with_existing_values(self):
+        self.table.get.return_value = {"child_id": CHILD_ID, "current_month": 4, "current_week": 2}
+
+        self.service.set_course_progress(CHILD_ID, {"current_week": 3})
+
+        self.table.update.assert_called_once_with(
+            CHILD_ID, {"current_week": 3, "display": "M4 W3"}, key_name='child_id'
+        )
+
+    def test_delete_uses_child_id_key(self):
+        self.service.delete_course_progress(CHILD_ID)
+
+        self.table.delete.assert_called_once_with(CHILD_ID, key_name='child_id')
+
 
 @patch('progress.views.progress_db')
 class CourseProgressNestedDetailRouteTests(ProgressAPITestCase):

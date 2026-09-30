@@ -200,6 +200,7 @@ class ChildViewSet(viewsets.ViewSet):
         # Notes
         for note in progress_db.list_notes(child_id):
             progress_db.delete_note(note['id'])
+        progress_db.delete_course_progress(child_id)
 
         children_db.delete_child(child_id)
         return Response(status=status.HTTP_204_NO_CONTENT)

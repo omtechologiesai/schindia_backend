@@ -345,6 +345,7 @@ class ChildDestroyTests(ChildrenAPITestCase):
         mock_progress_db.delete_attendance.assert_called_once_with("attendance-1")
         mock_progress_db.delete_journey_entry.assert_called_once_with("journey-1")
         mock_progress_db.delete_note.assert_called_once_with("note-1")
+        mock_progress_db.delete_course_progress.assert_called_once_with(CHILD_ID)
         mock_children_db.delete_child.assert_called_once_with(CHILD_ID)
 
 

@@ -68,7 +68,7 @@ class ChildListSerializer(serializers.Serializer):
     def get_course_progress(self, obj):
         from dynamo_backend.services import progress_db
         progress = progress_db.get_course_progress(str(obj.get('id', '')))
-        return progress.get('display') if progress else 'M1 W1'
+        return (progress or {}).get('display', 'M1 W1')
 
     def get_status(self, obj):
         """Active if child has a current enrolment (end_date >= today or no end_date)."""

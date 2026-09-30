@@ -123,17 +123,21 @@ class ProgressDynamoService:
 
     # Course Progress CRUD (child_id is the partition key — 1:1 relationship)
     def get_course_progress(self, child_id):
-        return self.course_progress.get(str(child_id))
+        return self.course_progress.get(str(child_id), key_name='child_id')
 
     def set_course_progress(self, child_id, data):
         """Upsert course progress — child_id is the PK, no race condition."""
         item = dict(data)
-        item['child_id'] = str(child_id)
         item.pop('id', None)
-        existing = self.get_course_progress(child_id)
-        if existing:
-            return self.course_progress.update(str(child_id), item)
-        return self.course_progress.create(item)
+        # child_id identifies the row rather than being written into it, and
+        # DynamoDB rejects a key attribute inside an update expression.
+        item.pop('child_id', None)
+        merged = {**(self.get_course_progress(child_id) or {}), **item}
+        item['display'] = f"M{merged.get('current_month', 1)} W{merged.get('current_week', 1)}"
+        return self.course_progress.update(str(child_id), item, key_name='child_id')
+
+    def delete_course_progress(self, child_id):
+        return self.course_progress.delete(str(child_id), key_name='child_id')
 
     # Activity feed (combined)
     def get_activity_feed(self, child_id, limit=20):
@@ -220,11 +224,7 @@ class ProgressDynamoService:
 
         journey_entries = len(self.list_journey(child_id))
 
-        progress = self.get_course_progress(child_id)
-        course_progress = (
-            f"M{progress.get('current_month', 1)} W{progress.get('current_week', 1)}"
-            if progress else 'M1 W1'
-        )
+        course_progress = (self.get_course_progress(child_id) or {}).get('display', 'M1 W1')
 
         return {
             'sessions_this_week': sessions_this_week,
