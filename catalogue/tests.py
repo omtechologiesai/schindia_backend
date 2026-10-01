@@ -141,8 +141,17 @@ class CatalogueItemListRetrieveTests(CatalogueAPITestCase):
 class CatalogueItemCreateTests(CatalogueAPITestCase):
     VALID_PAYLOAD = {
         'name': 'Workbook set', 'code': 'MAT-WKB', 'category': 'material',
-        'price': 1200, 'unit': 'per term',
+        'price': 1200, 'unit': 'per session',
     }
+
+    def test_unit_outside_the_enum_is_rejected(self, mock_db):
+        payload = {**self.VALID_PAYLOAD, 'unit': 'per term'}
+
+        resp = self.client.post('/api/v1/catalogue-items/', payload, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('unit', resp.data)
+        mock_db.create_item.assert_not_called()
 
     def test_missing_name(self, mock_db):
         payload = {**self.VALID_PAYLOAD, 'name': '  '}
@@ -264,6 +273,31 @@ class CatalogueItemUpdateTests(CatalogueAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         mock_db.list_items.assert_not_called()
         mock_db.update_item.assert_called_once_with(ITEM_ID, {'price': 9000})
+
+    def test_changing_unit_to_one_outside_the_enum_is_rejected(self, mock_db):
+        mock_db.get_item.return_value = global_item()
+
+        resp = self.client.patch(f'/api/v1/catalogue-items/{ITEM_ID}/', {'unit': 'per term'}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('unit', resp.data)
+        mock_db.update_item.assert_not_called()
+
+    def test_older_product_can_keep_its_existing_unit(self, mock_db):
+        mock_db.get_item.return_value = global_item()  # unit 'one-time'
+        mock_db.update_item.return_value = {**global_item(), 'price': 9000}
+
+        resp = self.client.patch(f'/api/v1/catalogue-items/{ITEM_ID}/', {'price': 9000, 'unit': 'one-time'}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+    def test_unit_can_change_to_per_session(self, mock_db):
+        mock_db.get_item.return_value = global_item()
+        mock_db.update_item.return_value = {**global_item(), 'unit': 'per session'}
+
+        resp = self.client.patch(f'/api/v1/catalogue-items/{ITEM_ID}/', {'unit': 'per session'}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
 
     def test_rename_code_clashing_with_another_item_is_rejected(self, mock_db):
         mock_db.get_item.return_value = global_item()
