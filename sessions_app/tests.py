@@ -545,6 +545,7 @@ class SessionsServiceTests(SimpleTestCase):
                          ["chick", "bunny", "kitty", "puppy", "bear", "giraffe"])
         self.assertEqual(len({r["id"] for r in created}), 6)
         self.assertEqual(created[0]["session_key"], f"{CENTRE_ID}#chick")
+        self.assertEqual({r["child_limit"] for r in created}, {6})
 
     def test_provision_skips_sessions_the_centre_already_has(self):
         self.table.query_by_index.return_value = [self._row("chick"), self._row("bunny")]
