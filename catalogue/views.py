@@ -1,9 +1,20 @@
+from enum import Enum
+
 from rest_framework import viewsets, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import catalogue_db
+
+
+class ProductUnit(str, Enum):
+    PER_MONTH = 'per month'
+    PER_SESSION = 'per session'
+
+
+PRODUCT_UNITS = [u.value for u in ProductUnit]
+UNIT_ERROR = {'unit': [f"Unit must be one of: {', '.join(PRODUCT_UNITS)}."]}
 
 
 class CatalogueItemViewSet(viewsets.ViewSet):
@@ -46,6 +57,9 @@ class CatalogueItemViewSet(viewsets.ViewSet):
             return Response({'detail': 'Product not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         data = request.data.copy()
+        # An older product may keep the unit it already has; any change must be to a listed unit.
+        if 'unit' in data and data['unit'] not in PRODUCT_UNITS and data['unit'] != item.get('unit'):
+            return Response(UNIT_ERROR, status=status.HTTP_400_BAD_REQUEST)
         if 'code' in data:
             clash = self._code_clash(data.get('code'), data.get('centre_id', item.get('centre_id')), exclude_id=item['id'])
             if clash:
@@ -114,7 +128,9 @@ def _validate_item(data):
     except (TypeError, ValueError):
         return {'price': ['Enter a valid price.']}
     data.setdefault('category', 'other')
-    data.setdefault('unit', 'per month')
+    data.setdefault('unit', ProductUnit.PER_MONTH.value)
+    if data['unit'] not in PRODUCT_UNITS:
+        return UNIT_ERROR
     return None
 
 
