@@ -406,8 +406,11 @@ class EnrolmentViewSet(viewsets.ViewSet):
         data = request.data.copy()
         # Registration books several classes: notify=false skips the per-class
         # email, and the last booking sends notify='summary' — one email listing
-        # every class the child is now booked into.
+        # every live class the child has, not just this request's. Right for a
+        # newly registered child; misleading for a child with earlier bookings.
         notify = data.pop('notify', True)
+        if notify in (False, 'false'):
+            notify = False
         child_pk = self.kwargs.get('child_pk') or data.get('child_id') or data.get('child')
         if child_pk:
             data['child_id'] = str(child_pk)
@@ -431,9 +434,15 @@ class EnrolmentViewSet(viewsets.ViewSet):
                 if not any(e.get('id') == enrolment.get('id') for e in listed):
                     listed.append(enrolment)
                 for e in listed:
-                    _, slot, session, _, room = _resolve_enrolment_context(e)
-                    if slot:
-                        classes.append((slot, session, room))
+                    slot_id = e.get('slot_id') or e.get('slot')
+                    slot = sessions_db.get_slot(str(slot_id)) if slot_id else None
+                    if not slot:
+                        continue
+                    session = sessions_db.get_session(
+                        str(slot['session_id']), centre_id=slot.get('centre_id')
+                    ) if slot.get('session_id') else None
+                    room = centres_db.get_room(str(slot['room_id'])) if slot.get('room_id') else None
+                    classes.append((slot, session, room))
                 send_enrolments_summary_email(child, centre, classes)
         elif notify is not False:
             child, slot, session, centre, room = _resolve_enrolment_context(enrolment)

@@ -124,9 +124,17 @@ def send_enrolments_summary_email(child, centre, classes):
     registration), instead of one email per class. `classes` is a list of
     (slot, session, room); weekly repeats of the same class are listed once.
     """
+    if not classes:
+        return
     child_name = f"{child.get('first_name', '')} {child.get('last_name', '')}".strip()
     centre_name = (centre or {}).get('name', '')
 
+    # Week order (Mon first, then by time) so the list reads the way the week runs.
+    days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+    classes = sorted(classes, key=lambda c: (
+        days.index((c[0] or {}).get('day')) if (c[0] or {}).get('day') in days else len(days),
+        (c[0] or {}).get('start_time', ''),
+    ))
     grouped = {}
     for slot, session, room in classes:
         grouped.setdefault(_slot_description(slot, session, room), []).append((slot or {}).get('start_date', ''))
