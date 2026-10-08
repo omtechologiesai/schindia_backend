@@ -6,7 +6,10 @@ from rest_framework.response import Response
 from schindia_auth.permissions import IsApprovedUser
 from dynamo_backend.services import children_db, progress_db, sessions_db, centres_db
 from dynamo_backend.services.children_service import is_archived
-from notifications.mailer import send_enrolment_added_email, send_enrolment_removed_email, send_child_registered_email
+from notifications.mailer import (
+    send_enrolment_added_email, send_enrolment_removed_email, send_child_registered_email,
+    send_enrolments_summary_email,
+)
 from roles.access import get_user_access, centre_not_found, permission_denied
 from .serializers import ContactSerializer, ChildEnrolmentSerializer
 
@@ -401,6 +404,13 @@ class EnrolmentViewSet(viewsets.ViewSet):
 
     def create(self, request, *args, **kwargs):
         data = request.data.copy()
+        # Registration books several classes: notify=false skips the per-class
+        # email, and the last booking sends notify='summary' — one email listing
+        # every live class the child has, not just this request's. Right for a
+        # newly registered child; misleading for a child with earlier bookings.
+        notify = data.pop('notify', True)
+        if notify in (False, 'false'):
+            notify = False
         child_pk = self.kwargs.get('child_pk') or data.get('child_id') or data.get('child')
         if child_pk:
             data['child_id'] = str(child_pk)
@@ -414,9 +424,30 @@ class EnrolmentViewSet(viewsets.ViewSet):
 
         enrolment = children_db.create_enrolment(data)
 
-        child, slot, session, centre, room = _resolve_enrolment_context(enrolment)
-        if child:
-            send_enrolment_added_email(child, slot, session, centre, room=room)
+        if notify == 'summary':
+            child, _, _, centre, _ = _resolve_enrolment_context(enrolment)
+            if child:
+                classes = []
+                # The index behind list_enrolments can lag a write, so make sure
+                # the booking just made is in the list.
+                listed = children_db.list_enrolments(str(child['id']))
+                if not any(e.get('id') == enrolment.get('id') for e in listed):
+                    listed.append(enrolment)
+                for e in listed:
+                    slot_id = e.get('slot_id') or e.get('slot')
+                    slot = sessions_db.get_slot(str(slot_id)) if slot_id else None
+                    if not slot:
+                        continue
+                    session = sessions_db.get_session(
+                        str(slot['session_id']), centre_id=slot.get('centre_id')
+                    ) if slot.get('session_id') else None
+                    room = centres_db.get_room(str(slot['room_id'])) if slot.get('room_id') else None
+                    classes.append((slot, session, room))
+                send_enrolments_summary_email(child, centre, classes)
+        elif notify is not False:
+            child, slot, session, centre, room = _resolve_enrolment_context(enrolment)
+            if child:
+                send_enrolment_added_email(child, slot, session, centre, room=room)
 
         return Response(enrolment, status=status.HTTP_201_CREATED)
 

@@ -580,6 +580,91 @@ class EnrolmentCreateTests(ChildrenAPITestCase):
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         mock_send_enrolment_added_email.assert_called_once_with(child, slot, session, centre, room=room)
 
+    def test_create_with_notify_false_sends_no_email(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_added_email
+    ):
+        mock_children_db.create_enrolment.return_value = {"id": ENROLMENT_ID, "child_id": CHILD_ID, "slot_id": "s1"}
+        mock_children_db.get_child.return_value = {"id": CHILD_ID, "centre_id": CENTRE_ID}
+
+        resp = self.client.post(
+            f'/api/v1/children/{CHILD_ID}/enrolments/', {"slotId": "s1", "notify": False}, format='json'
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        mock_send_enrolment_added_email.assert_not_called()
+        self.assertNotIn("notify", mock_children_db.create_enrolment.call_args[0][0])
+
+    def test_create_with_notify_string_false_sends_no_email(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_added_email
+    ):
+        mock_children_db.create_enrolment.return_value = {"id": ENROLMENT_ID, "child_id": CHILD_ID, "slot_id": "s1"}
+        mock_children_db.get_child.return_value = {"id": CHILD_ID, "centre_id": CENTRE_ID}
+
+        resp = self.client.post(
+            f'/api/v1/children/{CHILD_ID}/enrolments/', {"slotId": "s1", "notify": "false"}, format='json'
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        mock_send_enrolment_added_email.assert_not_called()
+
+    def test_summary_with_no_resolvable_slots_sends_nothing(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_added_email
+    ):
+        from django.core import mail
+        mock_children_db.create_enrolment.return_value = {"id": "e-gone", "child_id": CHILD_ID, "slot_id": "gone"}
+        mock_children_db.get_child.return_value = {"id": CHILD_ID, "centre_id": CENTRE_ID,
+                                                   "contacts": [{"invite_as": "Parent", "email": "p@example.com"}]}
+        mock_children_db.list_enrolments.return_value = []
+        mock_sessions_db.get_slot.return_value = None
+        mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "name": "Indiranagar"}
+
+        resp = self.client.post(
+            f'/api/v1/children/{CHILD_ID}/enrolments/', {"slotId": "gone", "notify": "summary"}, format='json'
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_create_with_notify_summary_sends_one_email_listing_every_class(
+        self, mock_children_db, mock_sessions_db, mock_centres_db, mock_send_enrolment_added_email
+    ):
+        from django.core import mail
+        child = {"id": CHILD_ID, "first_name": "Aarav", "last_name": "Patel", "centre_id": CENTRE_ID,
+                 "contacts": [{"invite_as": "Parent", "email": "parent@example.com"}]}
+        # Three weekly Puppy classes and one Bear class; "s2" is the booking being made now.
+        slots = {
+            f"s{i}": {"id": f"s{i}", "centre_id": CENTRE_ID, "session_id": "puppy", "room_id": "r1",
+                      "day": "tue", "start_time": "11:00", "start_date": d}
+            for i, d in enumerate(["2026-10-06", "2026-10-13", "2026-10-20"])
+        }
+        slots["b"] = {"id": "b", "centre_id": CENTRE_ID, "session_id": "bear", "room_id": "r1",
+                      "day": "thu", "start_time": "09:00", "start_date": "2026-10-08"}
+        mock_children_db.create_enrolment.return_value = {"id": "e-s2", "child_id": CHILD_ID, "slot_id": "s2"}
+        mock_children_db.get_child.return_value = child
+        # The index hasn't caught up with the booking just made ("s2"): it must still be listed, once.
+        # It also returns Thursday's Bear first, which the email must not.
+        mock_children_db.list_enrolments.return_value = [
+            {"id": f"e-{k}", "child_id": CHILD_ID, "slot_id": k} for k in ["b", "s0", "s1"]
+        ]
+        mock_sessions_db.get_slot.side_effect = lambda sid: slots[sid]
+        mock_sessions_db.get_session.side_effect = lambda sid, centre_id=None: {"name": sid.capitalize()}
+        mock_centres_db.get_centre.return_value = {"id": CENTRE_ID, "name": "Indiranagar"}
+        mock_centres_db.get_room.return_value = {"name": "Room 1"}
+
+        resp = self.client.post(
+            f'/api/v1/children/{CHILD_ID}/enrolments/', {"slotId": "s2", "notify": "summary"}, format='json'
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        mock_send_enrolment_added_email.assert_not_called()
+        self.assertEqual(len(mail.outbox), 1)
+        body = mail.outbox[0].body
+        self.assertIn("Puppy — Tue 11:00 — Room: Room 1 (3 classes, 2026-10-06 to 2026-10-20)", body)
+        self.assertIn("Bear — Thu 09:00 — Room: Room 1 (2026-10-08)", body)
+        # Listed in week order: Tuesday's Puppy before Thursday's Bear, whatever the index order.
+        self.assertLess(body.index("Puppy"), body.index("Bear"))
+        self.assertEqual(mail.outbox[0].to, ["parent@example.com"])
+
 
 @patch('children.views.send_enrolment_removed_email')
 @patch('children.views.centres_db')

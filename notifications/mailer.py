@@ -118,6 +118,49 @@ def send_child_registered_email(child, centre):
     _send(subject, message, emails)
 
 
+def send_enrolments_summary_email(child, centre, classes):
+    """
+    One email listing every class a child was booked into at once (at
+    registration), instead of one email per class. `classes` is a list of
+    (slot, session, room); weekly repeats of the same class are listed once.
+    """
+    if not classes:
+        return
+    child_name = f"{child.get('first_name', '')} {child.get('last_name', '')}".strip()
+    centre_name = (centre or {}).get('name', '')
+
+    # Week order (Mon first, then by time) so the list reads the way the week runs.
+    days = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+    classes = sorted(classes, key=lambda c: (
+        days.index((c[0] or {}).get('day')) if (c[0] or {}).get('day') in days else len(days),
+        (c[0] or {}).get('start_time', ''),
+    ))
+    grouped = {}
+    for slot, session, room in classes:
+        grouped.setdefault(_slot_description(slot, session, room), []).append((slot or {}).get('start_date', ''))
+    lines = []
+    for description, dates in grouped.items():
+        dates = sorted(d for d in dates if d)
+        if len(dates) > 1:
+            lines.append(f"  • {description} ({len(dates)} classes, {dates[0]} to {dates[-1]})")
+        elif dates:
+            lines.append(f"  • {description} ({dates[0]})")
+        else:
+            lines.append(f"  • {description}")
+
+    subject = f"Sessions scheduled — {child_name}"
+    message = (
+        f"Dear Parent/Guardian,\n\n"
+        f"{child_name} has been booked into the following sessions at {centre_name}:\n\n"
+        + "\n".join(lines) + "\n\n"
+        f"Best regards,\n"
+        f"{centre_name}"
+    )
+
+    emails = _parent_contact_emails(child)
+    _send(subject, message, emails)
+
+
 def send_enrolment_added_email(child, slot, session, centre, room=None):
     """Child added to a timetable slot (Req: timetable planned / child added)."""
     child_name = f"{child.get('first_name', '')} {child.get('last_name', '')}".strip()
